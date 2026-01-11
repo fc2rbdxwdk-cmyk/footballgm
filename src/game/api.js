@@ -36,12 +36,17 @@ export function saveLeague(league) {
 
 const TEAM_COLORS = ['#1f77b4','#ff7f0e','#2ca02c','#d62728','#9467bd','#8c564b','#e377c2','#7f7f7f','#bcbd22','#17becf']
 
+const FIRSTS = ["Alex","Jordan","Taylor","Chris","Drew","Sam","Cody","Blake","Evan","Ryan","Logan","Kyle","Mason","Sean","Tyler","Derek","Noah","Liam","Oliver","Ethan"]
+const LASTS = ["Johnson","Smith","Brown","Davis","Miller","Wilson","Moore","Taylor","Anderson","Thomas","Jackson","White","Harris","Martin","Thompson","Garcia","Martinez","Robinson","Clark","Rodriguez"]
+function randomName(){ return `${sample(FIRSTS)} ${sample(LASTS)}` }
+
 function makePlayer(name, pos='RB', overall=70, age=24, teamColor = '#444', salaryOverride) {
-  return { id: uid('p_'), name, pos, overall, age, contract: { years: 2, salary: salaryOverride || randInt(4000,12000) }, starter: false, injury: null, teamColor, seasonStats: { games:0, passY:0, passTD:0, int:0, rushY:0, rushTD:0, recY:0, recTD:0, tackles:0, sacks:0 } }
+  const n = name || randomName()
+  return { id: uid('p_'), name: n, pos, overall, age, contract: { years: 2, salary: salaryOverride || randInt(4000,12000) }, starter: false, injury: null, teamColor, seasonStats: { games:0, passY:0, passTD:0, int:0, rushY:0, rushTD:0, recY:0, recTD:0, tackles:0, sacks:0 } }
 }
 
 function makeTeam(name, color) {
-  const roster = Array.from({ length: 12 }).map((_, i) => makePlayer(`${name} Player ${i+1}`, ['QB','RB','WR','TE','OL','DL','LB','CB'][i%8], randInt(60,80), randInt(20,34), color))
+  const roster = Array.from({ length: 12 }).map((_, i) => makePlayer(null, ['QB','RB','WR','TE','OL','DL','LB','CB'][i%8], randInt(60,80), randInt(20,34), color))
   // mark first few as starters (simple rule)
   roster.slice(0,4).forEach(p=> p.starter = true)
   return { name, color, roster, record: { w:0,l:0 }, pointsFor:0, pointsAgainst:0, playedOpponents: [] }

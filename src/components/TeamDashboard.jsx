@@ -26,6 +26,7 @@ export default function TeamDashboard({ league, onSimWeek, onViewRoster, onDraft
         <h2>Team Record</h2>
         <div className="record-stats">{team.record?.w}-{team.record?.l}</div>
         <div className="points">PF {team.pointsFor || 0} • PA {team.pointsAgainst || 0}</div>
+        <div style={{marginTop:8,color:'#BFBFBF'}}>Balance: ${Number(team.balance||0).toLocaleString()}</div>
       </div>
 
       <div className="panel key-players">

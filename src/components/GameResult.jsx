@@ -1,6 +1,8 @@
-import React from 'react'
+import React, { useState } from 'react'
+import LiveGame from './LiveGame'
 
 export default function GameResult({ summary, onBack }){
+  const [watching, setWatching] = useState(false)
   if(!summary) return null
   const { game, week } = summary
   const stats = summary.stats || game.stats || { home: [], away: [] }
@@ -51,7 +53,11 @@ export default function GameResult({ summary, onBack }){
         </div>
 
       </div>
-      <div className="actions"><button className="btn" onClick={onBack}>Back to Dashboard</button></div>
+      <div className="actions">
+        <button className="btn" onClick={onBack}>Back to Dashboard</button>
+        <button className="btn" onClick={()=> setWatching(true)}>Watch Live</button>
+      </div>
+      {watching && <LiveGame summary={summary} onClose={()=> setWatching(false)} />}
     </div>
   )
 }
