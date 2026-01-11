@@ -19,6 +19,7 @@ export default function TeamDashboard({ league, onSimWeek, onViewRoster, onDraft
           <button className="btn primary" onClick={onSimWeek}>Sim Week</button>
           <button className="btn" onClick={onViewRoster}>View Roster</button>
           <button className="btn" onClick={onDraft}>Draft</button>
+          <button className="btn" onClick={() => onViewRoster && onViewRoster('contracts')}>Contracts</button>
         </div>
       </div>
 
@@ -33,6 +34,10 @@ export default function TeamDashboard({ league, onSimWeek, onViewRoster, onDraft
         <h2>Key Players</h2>
         <div className="players-grid">
           {topPlayers.map(p=> <div key={p.id} onClick={()=> onViewPlayer && onViewPlayer(p)}><PlayerCard player={p} /></div>)}
+        </div>
+        <div style={{marginTop:10}}>
+          <button className="btn" onClick={() => onViewPlayer && onViewPlayer(team.roster[0])}>View Starters</button>
+          <button className="btn" onClick={() => alert('Open Contracts panel from Dashboard (use Contracts icon in nav)')}>Manage Contracts</button>
         </div>
       </div>
       <div className="panel">

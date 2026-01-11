@@ -11,8 +11,9 @@ body{margin:0;background:var(--black);color:var(--white);font-family:Inter, syst
 .brand{display:flex;align-items:center;gap:12px}
 .logo{width:36px;height:36px}
 .brand h1{font-size:18px;color:var(--orange);margin:0}
-.nav button{background:transparent;border:1px solid rgba(255,255,255,0.06);color:var(--white);padding:6px 10px;margin-left:8px;border-radius:6px}
-.container{padding:20px;display:flex;flex-direction:column;gap:16px}
+.nav .icon-btn{background:transparent;border:1px solid rgba(255,255,255,0.04);color:var(--white);padding:8px;margin-left:8px;border-radius:8px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer}
+.nav .icon-btn svg{display:block}
+.nav .icon-btn .badge{margin-left:6px}.container{padding:20px;display:flex;flex-direction:column;gap:16px}
 .dashboard{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px}
 .panel{background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));padding:14px;border-radius:10px;border:1px solid rgba(255,255,255,0.04)}
 .settings-view input[type="range"]{width:100%}
@@ -73,9 +74,16 @@ body{margin:0;background:var(--black);color:var(--white);font-family:Inter, syst
 /* live game modal */
 .livegame-modal{position:fixed;inset:0;background:linear-gradient(180deg,rgba(0,0,0,0.5),rgba(0,0,0,0.75));display:flex;align-items:center;justify-content:center;padding:24px}
 .livegame{background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));padding:16px;border-radius:10px;max-width:900px;width:100%}
-.field{background:linear-gradient(90deg,#123412,#0b2b10);height:160px;border-radius:8px;margin-top:12px;display:flex;align-items:center;justify-content:center;flex-direction:column}
-.field-play{color:#fff;font-weight:700}
-.play-list{max-height:120px;overflow:auto;margin-top:10px}
+.field{background:linear-gradient(90deg,#123412,#0b2b10);height:220px;border-radius:8px;margin-top:12px;display:block;position:relative;padding:12px}
+.field .yard-lines{position:absolute;inset:0}
+.field .yard{position:absolute;top:8px;font-size:12px;color:rgba(255,255,255,0.07)}
+.players-on-field{position:absolute;inset:0}
+.field-player{position:absolute;width:56px;height:26px;border-radius:6px;color:#fff;display:flex;align-items:center;justify-content:center;font-size:11px;transform:translate(-50%,-50%);transition:all .7s cubic-bezier(.22,.8,.32,1)}
+.field-player .fp-name{font-weight:700}
+.ball{position:absolute;top:50%;transform:translate(-50%,-50%);transition:left .7s cubic-bezier(.22,.8,.32,1);font-size:20px}
+.field-play.big{position:absolute;bottom:14px;left:14px;color:#fff;font-weight:700}
+.play-index{position:absolute;bottom:10px;right:14px;color:#BFBFBF}
+.play-list{max-height:140px;overflow:auto;margin-top:10px}
 .play{padding:6px;border-bottom:1px solid rgba(255,255,255,0.03);color:var(--muted)}
 .play.active{background:linear-gradient(90deg,rgba(255,122,0,0.06),rgba(255,255,255,0.01));color:var(--white);font-weight:700}
 

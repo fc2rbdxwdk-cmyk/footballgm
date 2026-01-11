@@ -13,7 +13,10 @@ export default function FreeAgency({ league, onSign, onBack }){
         {fas.map(p => (
           <div key={p.id} className="prospect">
             <PlayerCard player={p} />
-            <button className="btn primary" onClick={()=> onSign(p)}>Sign</button>
+            <div style={{display:'flex',gap:8,marginTop:8}}>
+              <button className="btn primary" onClick={()=> onSign(p)}>Sign</button>
+              <div style={{color:'#BFBFBF',fontSize:13,alignSelf:'center'}}>${p.contract?.salary?.toLocaleString()}</div>
+            </div>
           </div>
         ))}
       </div>

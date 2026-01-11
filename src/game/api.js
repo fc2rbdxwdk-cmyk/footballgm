@@ -62,8 +62,8 @@ export function createNewLeague({ numTeams = 8, seasonLength = 10, teamNames = [
   teams.forEach(t => t.roster.forEach(p => p.teamColor = t.color))
   userTeam.roster.forEach(p=> p.teamColor = userTeam.color)
 
-  const freeAgents = Array.from({length:Math.max(8, Math.round(numTeams*1.2))}).map((_,i)=> makePlayer(`FA Player ${i+1}`, sample(['QB','RB','WR','TE']), randInt(55,78), randInt(21,33)))
-  const prospects = Array.from({length:Math.max(10, Math.round(numTeams*1.5))}).map((_,i)=> makePlayer(`Prospect ${i+1}`, sample(['QB','RB','WR','TE']), randInt(60,85), randInt(19,22)))
+  const freeAgents = Array.from({length:Math.max(8, Math.round(numTeams*1.2))}).map((_,i)=> makePlayer(null, sample(['QB','RB','WR','TE']), randInt(55,78), randInt(21,33)))
+  const prospects = Array.from({length:Math.max(10, Math.round(numTeams*1.5))}).map((_,i)=> makePlayer(null, sample(['QB','RB','WR','TE']), randInt(60,85), randInt(19,22)))
   return { teams, userTeam, freeAgents, prospects, leagueName, settings: { difficulty: 1, seasonLength, salaryCap: false, trainingRisk: 1, setupComplete: false }, week: 1, tradeHistory: [], notifications: [] }
 }
 
@@ -341,13 +341,14 @@ export function updateRoster(team, roster) {
 
 export function signFreeAgent(league, player) {
   const cost = (player.contract && player.contract.salary) || 0
-  league.freeAgents = league.freeAgents.filter(p=>p.id !== player.id)
   league.userTeam.balance = league.userTeam.balance || 0
   if(cost > league.userTeam.balance){
     addNotification(league, `Unable to sign ${player.name}. Insufficient funds ($${(league.userTeam.balance||0).toLocaleString()})`)
     saveLeague(league)
     return league
   }
+  // remove from free agents only after confirming funds
+  league.freeAgents = league.freeAgents.filter(p=>p.id !== player.id)
   league.userTeam.balance -= cost
   player.teamColor = league.userTeam.color
   league.userTeam.roster.push(player)
@@ -372,6 +373,54 @@ export function signDraftPick(league, player) {
   addNotification(league, `${player.name} (draft) signed for $${cost.toLocaleString()}. New balance: $${(league.userTeam.balance||0).toLocaleString()}`)
   saveLeague(league)
   return league
+}
+
+export function proposeContract(league, playerId, years, salary){
+  // propose/accept a simple contract: set years and salary and adjust balance by a one-time signing bonus (1yr salary portion)
+  const p = getPlayerById(league, playerId)
+  if(!p) return { success:false, reason: 'Player not found' }
+  const signingBonus = Math.round(salary * 0.5) // 50% of annual as signing cost
+  league.userTeam.balance = league.userTeam.balance || 0
+  if(signingBonus > league.userTeam.balance){
+    addNotification(league, `Unable to sign ${p.name}. Insufficient funds for signing bonus ($${(league.userTeam.balance||0).toLocaleString()})`)
+    saveLeague(league)
+    return { success:false, reason: 'Insufficient funds' }
+  }
+  league.userTeam.balance -= signingBonus
+  // find player reference in roster to update
+  const pl = (league.userTeam.roster||[]).find(x=>x.id===playerId)
+  if(pl){ pl.contract = { years: Number(years), salary: Number(salary) } }
+  addNotification(league, `${p.name} signed ${years}y @ $${Number(salary).toLocaleString()} (bonus $${signingBonus.toLocaleString()}). New balance: $${(league.userTeam.balance||0).toLocaleString()}`)
+  saveLeague(league)
+  return { success:true }
+}
+
+export function setInjuryWeeks(league, playerId, weeks){
+  // find the player reference inside teams, userTeam, freeAgents or prospects
+  const teamRosters = (league.teams||[]).map(t=> t.roster || [])
+  const lists = [ ...teamRosters, league.userTeam?.roster || [], league.freeAgents || [], league.prospects || [] ]
+  let pl = null
+  for(const lst of lists){
+    if(!Array.isArray(lst)) continue
+    const found = lst.find(p=>p.id === playerId)
+    if(found){ pl = found; break }
+  }
+  if(!pl) return league
+  // set injury weeks; if 0 => clear injury
+  if(weeks <= 0){
+    pl.injury = null
+    addNotification(league, `${pl.name} has been marked recovered.`)
+  } else {
+    pl.injury = pl.injury || { type: 'unknown', weeks:0 }
+    pl.injury.weeks = Number(weeks)
+    addNotification(league, `${pl.name} injury updated: ${pl.injury.weeks}w`)
+  }
+  saveLeague(league)
+  return league
+}
+
+export function clearInjury(league, playerId){
+  return setInjuryWeeks(league, playerId, 0)
 }
 
 export function tradePlayers(league, teamAName, playerAId, teamBName, playerBId) {
