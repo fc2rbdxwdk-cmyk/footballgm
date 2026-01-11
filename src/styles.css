@@ -1,0 +1,71 @@
+:root{
+  --black: #000000;
+  --orange: #FF7A00;
+  --white: #ffffff;
+  --muted: #BFBFBF;
+}
+*{box-sizing:border-box}
+html,body,#root{height:100%;}
+body{margin:0;background:var(--black);color:var(--white);font-family:Inter, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial;}
+.topbar{display:flex;justify-content:space-between;align-items:center;padding:12px 20px;border-bottom:1px solid rgba(255,255,255,0.04)}
+.brand{display:flex;align-items:center;gap:12px}
+.logo{width:36px;height:36px}
+.brand h1{font-size:18px;color:var(--orange);margin:0}
+.nav button{background:transparent;border:1px solid rgba(255,255,255,0.06);color:var(--white);padding:6px 10px;margin-left:8px;border-radius:6px}
+.container{padding:20px;display:flex;flex-direction:column;gap:16px}
+.dashboard{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px}
+.panel{background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));padding:14px;border-radius:10px;border:1px solid rgba(255,255,255,0.04)}
+.settings-view input[type="range"]{width:100%}
+.settings-view input[type="number"]{width:120px;padding:6px;border-radius:6px;border:1px solid rgba(255,255,255,0.04);background:transparent;color:var(--white)}
+.next-game .game-card{padding:12px;background:rgba(255,255,255,0.02);border-radius:8px;margin-top:8px}
+.actions{margin-top:12px;display:flex;gap:8px}
+.btn{background:transparent;border:1px solid rgba(255,255,255,0.06);padding:8px 12px;border-radius:8px;color:var(--white);cursor:pointer}
+.btn.primary{background:var(--orange);border-color:var(--orange);color:var(--black)}
+.players-grid{display:flex;gap:8px}
+.player-card{padding:8px;background:transparent;border-radius:8px;border:1px solid rgba(255,255,255,0.03);width:100%}
+.player-top{display:flex;justify-content:space-between;font-weight:700}
+.player-body{display:flex;justify-content:space-between;margin-top:8px;color:var(--muted)}
+.roster-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px}
+.prospects-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px}
+.panel-header{display:flex;justify-content:space-between;align-items:center}
+.footer{padding:10px 20px;text-align:center;color:var(--muted);font-size:13px;border-top:1px solid rgba(255,255,255,0.02)}
+
+/* transitions and hover effects */
+.btn{transition:all .16s ease}
+.btn:hover{transform:translateY(-2px);box-shadow:0 6px 18px rgba(0,0,0,0.4)}
+.player-card{transition:transform .18s ease, box-shadow .18s ease}
+.player-card:hover{transform:translateY(-6px);box-shadow:0 8px 20px rgba(0,0,0,0.6)}
+.trade-view select{padding:8px;border-radius:6px;border:1px solid rgba(255,255,255,0.04);background:transparent;color:var(--white)}
+
+/* mini jersey */
+.mini-jersey{width:46px;height:56px;border-radius:6px;display:flex;align-items:center;justify-content:center;color:var(--white);font-weight:800}
+.jersey-number{font-size:14px}
+
+.player-page .player-card{max-width:280px}
+.notifications{display:flex;flex-direction:column;gap:6px}
+.notifications .note{background:rgba(255,255,255,0.02);padding:8px;border-radius:8px;font-size:13px;display:flex;justify-content:space-between;align-items:center}
+.notifications .note.muted{color:var(--muted)}
+.note-time{color:var(--muted);font-size:11px;margin-left:8px}
+.notifications .note.unread{border-left:4px solid var(--orange);background:linear-gradient(90deg, rgba(255,122,0,0.04), rgba(255,255,255,0.01))}
+
+/* header badge */
+.nav .badge{background:var(--orange);color:var(--black);padding:2px 8px;border-radius:999px;font-weight:700;margin-left:6px;font-size:12px}
+
+/* stat leaders */
+.leaders h4{margin:0 0 8px 0;color:var(--orange)}
+.leaders div{padding:6px;background:rgba(255,255,255,0.02);border-radius:6px;margin-bottom:6px}
+
+/* boxscore history item */
+.boxscore-history .history-item{padding:10px;background:rgba(255,255,255,0.02);border-radius:8px}
+.boxscore-history .history-item .btn{padding:6px 10px}
+
+/* starter badge */
+.player-card{position:relative}
+.starter-badge{position:absolute;right:8px;top:8px;background:var(--orange);color:var(--black);padding:4px 8px;border-radius:999px;font-weight:700;font-size:12px}
+
+.trade-history .history-item{padding:8px;background:rgba(255,255,255,0.02);border-radius:8px}
+
+@media (max-width:640px){
+  .nav button{padding:6px 8px;font-size:13px}
+  .players-grid{flex-direction:column}
+}
