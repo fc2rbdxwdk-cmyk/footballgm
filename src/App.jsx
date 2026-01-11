@@ -10,13 +10,21 @@ import PlayerPage from './components/PlayerPage'
 import TradeHistory from './components/TradeHistory'
 import BoxscoreHistory from './components/BoxscoreHistory'
 import Notifications from './components/Notifications'
-import { proposeTrade, loadLeague, saveLeague, createNewLeague, simulateWeek, generateProspects, markAllNotificationsRead } from './game/api'
+import Setup from './components/Setup'
+import { proposeTrade, loadLeague, saveLeague, createNewLeague, simulateWeek, generateProspects, markAllNotificationsRead, signDraftPick, signFreeAgent } from './game/api'
 
 const VIEWS = { DASH: 'dash', ROSTER: 'roster', DRAFT: 'draft', FA: 'fa', RESULTS: 'results', SETTINGS: 'settings', TRADE: 'trade', PLAYER: 'player', HISTORY: 'history', NOTIFICATIONS: 'notifications', BOXES: 'boxes' }
 
 export default function App() {
   const [league, setLeague] = useState(() => loadLeague() || createNewLeague())
   const [view, setView] = useState(VIEWS.DASH)
+
+  useEffect(()=>{
+    // if this is a new league and setup hasn't been completed show setup
+    if(league && league.settings && league.settings.setupComplete === false){
+      setView('setup')
+    }
+  }, [league])
   const [lastResults, setLastResults] = useState(null)
   const [selectedPlayer, setSelectedPlayer] = useState(null)
   const unreadCount = (league.notifications || []).filter(n=>!n.read).length
@@ -86,6 +94,17 @@ export default function App() {
     setView(VIEWS.DRAFT)
   }
 
+  function handleCreateLeague(data){
+    const l = createNewLeague({ numTeams: data.numTeams, seasonLength: data.seasonLength, teamNames: data.teamNames, leagueName: data.leagueName })
+    l.settings.setupComplete = true
+    // create some prospects automatically
+    l.prospects = generateProspects(Math.max(6, Math.round(data.numTeams/2)))
+    setLeague(l)
+    saveLeague(l)
+    // auto-open the draft
+    setView(VIEWS.DRAFT)
+  }
+
   function handleUpdateSettings(newSettings){
     setLeague(l => ({ ...l, settings: { ...l.settings, ...newSettings } }))
   }
@@ -128,12 +147,13 @@ export default function App() {
       </header>
 
       <main className="container">
+        {view === 'setup' && <Setup onStart={handleCreateLeague} initial={{ leagueName: league.leagueName, numTeams: (league.teams||[]).length, seasonLength: league.settings && league.settings.seasonLength, teamNames: (league.teams||[]).map(t=>t.name) }} />}
         {view === VIEWS.DASH && (
           <TeamDashboard league={league} onSimWeek={handleSimWeek} onViewRoster={() => go(VIEWS.ROSTER)} onDraft={handleStartDraft} onViewPlayer={handleViewPlayer} />
         )}
         {view === VIEWS.ROSTER && <Roster team={league.userTeam} onBack={() => go(VIEWS.DASH)} onUpdate={(t) => setLeague(l => ({ ...l, userTeam: t }))} />}
-        {view === VIEWS.DRAFT && <Draft league={league} onBack={() => go(VIEWS.DASH)} onDraftPick={(teamName, player) => setLeague(l => ({ ...l, prospects: l.prospects.filter(p=>p.id!==player.id), userTeam: { ...l.userTeam, roster: [...l.userTeam.roster, player] } }))} />}
-        {view === VIEWS.FA && <FreeAgency league={league} onSign={(player) => setLeague(l => ({ ...l, freeAgents: l.freeAgents.filter(p=>p.id!==player.id), userTeam: { ...l.userTeam, roster: [...l.userTeam.roster, player] } }))} onBack={() => go(VIEWS.DASH)} />}
+        {view === VIEWS.DRAFT && <Draft league={league} onBack={() => go(VIEWS.DASH)} onDraftPick={(teamName, player) => { const updated = signDraftPick(JSON.parse(JSON.stringify(league)), player); setLeague(updated) }} />}
+        {view === VIEWS.FA && <FreeAgency league={league} onSign={(player) => { const updated = signFreeAgent(JSON.parse(JSON.stringify(league)), player); setLeague(updated) }} onBack={() => go(VIEWS.DASH)} />}
         {view === VIEWS.RESULTS && <GameResult summary={lastResults} onBack={() => go(VIEWS.DASH)} />}
         {view === VIEWS.SETTINGS && <Settings settings={league.settings} onChange={handleUpdateSettings} onBack={() => go(VIEWS.DASH)} />}
         {view === VIEWS.TRADE && <Trade league={league} onBack={() => go(VIEWS.DASH)} onPropose={handleProposeTrade} />}

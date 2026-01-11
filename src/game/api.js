@@ -34,23 +34,32 @@ export function saveLeague(league) {
   }
 }
 
-function makePlayer(name, pos='RB', overall=70, age=24) {
-  return { id: uid('p_'), name, pos, overall, age, contract: { years: 2, salary: 1000 }, starter: false, injury: null, seasonStats: { games:0, passY:0, passTD:0, int:0, rushY:0, rushTD:0, recY:0, recTD:0, tackles:0, sacks:0 } }
+const TEAM_COLORS = ['#1f77b4','#ff7f0e','#2ca02c','#d62728','#9467bd','#8c564b','#e377c2','#7f7f7f','#bcbd22','#17becf']
+
+function makePlayer(name, pos='RB', overall=70, age=24, teamColor = '#444', salaryOverride) {
+  return { id: uid('p_'), name, pos, overall, age, contract: { years: 2, salary: salaryOverride || randInt(4000,12000) }, starter: false, injury: null, teamColor, seasonStats: { games:0, passY:0, passTD:0, int:0, rushY:0, rushTD:0, recY:0, recTD:0, tackles:0, sacks:0 } }
 }
 
-function makeTeam(name) {
-  const roster = Array.from({ length: 12 }).map((_, i) => makePlayer(`${name} Player ${i+1}`, ['QB','RB','WR','TE','OL','DL','LB','CB'][i%8], randInt(60,80), randInt(20,34)))
+function makeTeam(name, color) {
+  const roster = Array.from({ length: 12 }).map((_, i) => makePlayer(`${name} Player ${i+1}`, ['QB','RB','WR','TE','OL','DL','LB','CB'][i%8], randInt(60,80), randInt(20,34), color))
   // mark first few as starters (simple rule)
   roster.slice(0,4).forEach(p=> p.starter = true)
-  return { name, roster, record: { w:0,l:0 }, pointsFor:0, pointsAgainst:0 }
+  return { name, color, roster, record: { w:0,l:0 }, pointsFor:0, pointsAgainst:0, playedOpponents: [] }
 }
 
-export function createNewLeague() {
-  const teams = ['Ravens','Tigers','Warriors','Panthers','Bulls','Hawks','Knights','Titans'].map(makeTeam)
-  const userTeam = teams[0]
-  const freeAgents = Array.from({length:10}).map((_,i)=> makePlayer(`FA Player ${i+1}`, sample(['QB','RB','WR','TE']), randInt(55,78), randInt(21,33)))
-  const prospects = Array.from({length:12}).map((_,i)=> makePlayer(`Prospect ${i+1}`, sample(['QB','RB','WR','TE']), randInt(60,85), randInt(19,22)))
-  return { teams, userTeam, freeAgents, prospects, settings: { difficulty: 1, seasonLength: 10, salaryCap: false }, week: 1, tradeHistory: [], notifications: [] }
+export function createNewLeague({ numTeams = 8, seasonLength = 10, teamNames = ['Ravens','Tigers','Warriors','Panthers','Bulls','Hawks','Knights','Titans'], leagueName = 'My League' } = {}) {
+  // clamp numTeams and pick teamNames
+  numTeams = Math.max(4, Math.min(20, Number(numTeams)))
+  const names = teamNames.slice(0, numTeams)
+  const teams = names.map((n, i) => makeTeam(n, TEAM_COLORS[i % TEAM_COLORS.length]))
+  const userTeam = { ...teams[0], balance: 100000 }
+  // ensure every player's teamColor set
+  teams.forEach(t => t.roster.forEach(p => p.teamColor = t.color))
+  userTeam.roster.forEach(p=> p.teamColor = userTeam.color)
+
+  const freeAgents = Array.from({length:Math.max(8, Math.round(numTeams*1.2))}).map((_,i)=> makePlayer(`FA Player ${i+1}`, sample(['QB','RB','WR','TE']), randInt(55,78), randInt(21,33)))
+  const prospects = Array.from({length:Math.max(10, Math.round(numTeams*1.5))}).map((_,i)=> makePlayer(`Prospect ${i+1}`, sample(['QB','RB','WR','TE']), randInt(60,85), randInt(19,22)))
+  return { teams, userTeam, freeAgents, prospects, leagueName, settings: { difficulty: 1, seasonLength, salaryCap: false, trainingRisk: 1, setupComplete: false }, week: 1, tradeHistory: [], notifications: [] }
 }
 
 export function addNotification(league, text){
@@ -273,7 +282,11 @@ export function simulateWeek(league) {
   const { teams, userTeam, settings } = nextLeague
   // advance existing injuries (healing week-by-week)
   advanceInjuries(nextLeague)
-  const opp = sample(teams.filter(t=>t.name !== userTeam.name))
+  // pick an opponent the user hasn't played yet if possible
+  userTeam.playedOpponents = userTeam.playedOpponents || []
+  let candidates = teams.filter(t=>t.name !== userTeam.name && !userTeam.playedOpponents.includes(t.name))
+  if(candidates.length === 0){ userTeam.playedOpponents = []; candidates = teams.filter(t=>t.name !== userTeam.name) }
+  const opp = sample(candidates)
   const game = simulateGame(userTeam, opp, settings.difficulty)
   // apply results
   const [hs, as] = game.score
@@ -283,6 +296,9 @@ export function simulateWeek(league) {
   if(userWon){ userTeam.record.w +=1; opp.record.l +=1 } else { userTeam.record.l +=1; opp.record.w +=1 }
   userTeam.pointsFor += hs; userTeam.pointsAgainst += as
   opp.pointsFor += as; opp.pointsAgainst += hs
+  // mark played opponent for scheduling variety
+  userTeam.playedOpponents = userTeam.playedOpponents || []
+  if(!userTeam.playedOpponents.includes(opp.name)) userTeam.playedOpponents.push(opp.name)
 
   // simulate other matchups roughly
   teams.filter(t=> t.name !== userTeam.name && t.name !== opp.name).forEach(t=>{
@@ -319,8 +335,36 @@ export function updateRoster(team, roster) {
 }
 
 export function signFreeAgent(league, player) {
+  const cost = (player.contract && player.contract.salary) || 0
   league.freeAgents = league.freeAgents.filter(p=>p.id !== player.id)
+  league.userTeam.balance = league.userTeam.balance || 0
+  if(cost > league.userTeam.balance){
+    addNotification(league, `Unable to sign ${player.name}. Insufficient funds ($${(league.userTeam.balance||0).toLocaleString()})`)
+    saveLeague(league)
+    return league
+  }
+  league.userTeam.balance -= cost
+  player.teamColor = league.userTeam.color
   league.userTeam.roster.push(player)
+  addNotification(league, `${player.name} signed for $${cost.toLocaleString()}. New balance: $${(league.userTeam.balance||0).toLocaleString()}`)
+  saveLeague(league)
+  return league
+}
+
+export function signDraftPick(league, player) {
+  // cheaper signing bonus for rookies
+  const cost = Math.round(((player.contract && player.contract.salary) || 2000) * 0.5)
+  league.prospects = (league.prospects || []).filter(p=>p.id !== player.id)
+  league.userTeam.balance = league.userTeam.balance || 0
+  if(cost > league.userTeam.balance){
+    addNotification(league, `Unable to sign draft pick ${player.name}. Insufficient funds ($${(league.userTeam.balance||0).toLocaleString()})`)
+    saveLeague(league)
+    return league
+  }
+  league.userTeam.balance -= cost
+  player.teamColor = league.userTeam.color
+  league.userTeam.roster.push(player)
+  addNotification(league, `${player.name} (draft) signed for $${cost.toLocaleString()}. New balance: $${(league.userTeam.balance||0).toLocaleString()}`)
   saveLeague(league)
   return league
 }
