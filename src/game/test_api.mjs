@@ -1,5 +1,5 @@
 import assert from 'assert'
-import { createNewLeague, evaluateTrade, proposeTrade, simulateGame } from './api.js'
+import { createNewLeague, evaluateTrade, proposeTrade, simulateGame, advancePhase, runPlayoffs } from './api.js'
 import { simulateWeek, proposeContract, signFreeAgent, setInjuryWeeks, clearInjury, signDraftPick } from './api.js'
 import { scoutProspect, generateProspects, getScoutReport } from './api.js'
 
@@ -190,6 +190,34 @@ function testPersonaInfluence(){
   console.log('testPersonaInfluence: persona modified trade diff as expected', base.diff, '->', post.diff)
 }
 
+function testPhaseTransitions(){
+  let league = createNewLeague()
+  // ensure starting phase
+  assert.strictEqual(league.phase, 'offseason')
+  // move to draft
+  league = advancePhase(league)
+  assert.strictEqual(league.phase, 'draft')
+  // move to free agency
+  league = advancePhase(league)
+  assert.strictEqual(league.phase, 'free_agency')
+  // move to roster management
+  league = advancePhase(league)
+  assert.strictEqual(league.phase, 'roster_management')
+  // move to regular season
+  league = advancePhase(league)
+  assert.strictEqual(league.phase, 'regular_season')
+  // simulate and move to playoffs (this will simulate remaining weeks)
+  league = advancePhase(league)
+  console.log('After simulating weeks: week=', league.week, 'phase=', league.phase)
+  assert.strictEqual(league.phase, 'playoffs')
+  // finish playoffs -> cycle to offseason and increment season
+  const oldSeason = league.season
+  league = advancePhase(league)
+  assert.strictEqual(league.phase, 'offseason')
+  assert.strictEqual(league.season, oldSeason + 1)
+  console.log('Phase transitions test passed')
+}
+
 function runAll(){
   testEvaluateTrade()
   testProposeTrade()
@@ -201,6 +229,7 @@ function runAll(){
   testDraftSign()
   testPersonaInfluence()
   testScoutingModel()
+  testPhaseTransitions()
   console.log('All tests passed')
 }
 

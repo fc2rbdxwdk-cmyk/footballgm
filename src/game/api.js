@@ -85,8 +85,8 @@ export function createNewLeague({ numTeams = 8, seasonLength = 10, teamNames = [
   const freeAgents = Array.from({length:Math.max(8, Math.round(numTeams*1.2))}).map((_,i)=> makePlayer(null, sample(['QB','RB','WR','TE']), randInt(55,78), randInt(21,33)))
   const prospects = Array.from({length:Math.max(10, Math.round(numTeams*1.5))}).map((_,i)=> makePlayer(null, sample(['QB','RB','WR','TE']), randInt(60,85), randInt(19,22)))
   // convert prospects to scouting-aware prospects
-  const scoutedProspects = prospects.map(p => ({ id: p.id, name: p.name, pos: p.pos, trueOverall: p.overall, scoutGrade: Math.round(p.overall + randInt(-6,6)), scoutConfidence: 25, age: p.age, archetype: sample(['workhorse','speedster','positional-blocker']), bustProbability: Math.max(0.02, (80 - p.overall)/180) }))
-  return { teams, userTeam, freeAgents, prospects: scoutedProspects, leagueName, settings: { difficulty: 1, seasonLength, salaryCap: true, salaryCapAmount: 100000, trainingRisk: 1, setupComplete: false }, week: 1, season: 1, deadMoney: 0, tradeHistory: [], notifications: [], scoutingPoints: 10 }
+  const scoutedProspects = prospects.map(p => ({ id: p.id, name: p.name, pos: p.pos, trueOverall: p.overall, scoutGrade: Math.round(p.overall + randInt(-6,6)), scoutConfidence: 25, scoutHistory: [], age: p.age, archetype: sample(['workhorse','speedster','positional-blocker']), bustProbability: Math.max(0.02, (80 - p.overall)/180) }))
+  return { teams, userTeam, freeAgents, prospects: scoutedProspects, leagueName, settings: { difficulty: 1, seasonLength, salaryCap: true, salaryCapAmount: 100000, trainingRisk: 1, setupComplete: false }, week: 1, season: 1, phase: 'offseason', deadMoney: 0, tradeHistory: [], notifications: [], scoutingPoints: 10 }
 }
 
 export function addNotification(league, text){
@@ -339,6 +339,22 @@ export function getScoutReport(league, prospectId){
   return { success:true, grade: p.scoutGrade, confidence, sources: p.scoutHistory || [] }
 }
 
+export function setPhase(league, phase){
+  league.phase = phase
+  saveLeague(league)
+  addNotification(league, `Phase changed to ${phase}`)
+  return league
+}
+
+export function ensureFreeAgents(league, minCount = 8){
+  league.freeAgents = league.freeAgents || []
+  while(league.freeAgents.length < minCount){
+    league.freeAgents.push(makePlayer(null, sample(['QB','RB','WR','TE']), randInt(55,78)))
+  }
+  saveLeague(league)
+  return league
+}
+
 function teamStrength(team) {
   if(!team || !team.roster) return 60
   const avg = Math.round(team.roster.reduce((s,p)=>s+p.overall,0)/Math.max(1,team.roster.length))
@@ -483,6 +499,9 @@ export function simulateWeek(league) {
   const { teams, userTeam, settings } = nextLeague
   // advance existing injuries (healing week-by-week)
   advanceInjuries(nextLeague)
+  // if season is over, don't simulate further
+  const seasonLength = (nextLeague.settings && nextLeague.settings.seasonLength) || 10
+  if(nextLeague.week > seasonLength) return { league: nextLeague, summary: null }
   // pick an opponent the user hasn't played yet if possible
   userTeam.playedOpponents = userTeam.playedOpponents || []
   let candidates = teams.filter(t=>t.name !== userTeam.name && !userTeam.playedOpponents.includes(t.name))
@@ -738,6 +757,8 @@ export function evaluateTrade(league, offeringTeamName, receivingTeamName, offer
   const pRec = (receivingTeam.roster||[]).find(p=>p.id===receivingPlayerId)
   if(!pOff || !pRec) return { accepted:false, reason: 'Player not found' }
 
+  // existing evaluation logic...
+
   // simple value function: base on overall and youth premium
   function value(p){
     const ageFactor = Math.max(0, 30 - (p.age || 25))
@@ -790,4 +811,90 @@ export function proposeTrade(league, offeringTeamName, receivingTeamName, offeri
   }
   addNotification(league, `${offeringTeamName} proposed trade to ${receivingTeamName} — declined`)
   return { league, decision }
+}
+
+export function runPlayoffs(league){
+  // pick top 4 teams by record (userTeam included) for a simple semifinal->final bracket
+  const allTeams = [ ...(league.teams||[]), league.userTeam ].filter(Boolean)
+  const sorted = allTeams.sort((a,b)=> (b.record && b.record.w || 0) - (a.record && a.record.w || 0))
+  const top = sorted.slice(0,4)
+  if(top.length < 2) return { success:false, reason: 'Not enough teams' }
+  const semi1 = simulateGame(top[0], top[3], league.settings.difficulty)
+  const semi2 = simulateGame(top[1], top[2], league.settings.difficulty)
+  const winner1 = semi1.score[0] > semi1.score[1] ? top[0] : top[3]
+  const winner2 = semi2.score[0] > semi2.score[1] ? top[1] : top[2]
+  const final = simulateGame(winner1, winner2, league.settings.difficulty)
+  const champion = final.score[0] > final.score[1] ? winner1 : winner2
+  league.history = league.history || []
+  league.history.unshift({ season: league.season, champion: champion.name, finalScore: final.score })
+  addNotification(league, `${champion.name} won the championship for season ${league.season}!`)
+  saveLeague(league)
+  return { success:true, champion: champion.name }
+}
+
+export function advancePhase(league){
+  console.log('advancePhase called. current phase=', league.phase)
+  league.phase = league.phase || 'offseason'
+  const order = ['offseason','draft','free_agency','roster_management','regular_season','playoffs']
+  const idx = order.indexOf(league.phase)
+  const next = order[(idx + 1) % order.length]
+  console.log('advancePhase: idx=', idx, 'next=', next)
+  if(league.phase === 'offseason' && next === 'draft'){
+    // enter draft: ensure prospects and create draft board
+    ensureFreeAgents(league)
+    startDraft(league, league.draft?.rounds || 3)
+    setPhase(league, 'draft')
+    return league
+  }
+
+  if(league.phase === 'draft' && next === 'free_agency'){
+    // finalize draft (leave board state) and generate free agents pool
+    ensureFreeAgents(league)
+    setPhase(league, 'free_agency')
+    return league
+  }
+
+  if(league.phase === 'free_agency' && next === 'roster_management'){
+    // allow roster moves; pick up remaining FAs for AI teams automatically
+    ;(league.teams||[]).forEach(t=> ensureFreeAgents(league, 2))
+    setPhase(league, 'roster_management')
+    return league
+  }
+
+  if(league.phase === 'roster_management' && next === 'regular_season'){
+    // reset week and records
+    league.week = 1
+    ;(league.teams||[]).forEach(t=> t.record = { w:0,l:0 })
+    if(league.userTeam) league.userTeam.record = { w:0,l:0 }
+    setPhase(league, 'regular_season')
+    return league
+  }
+
+  if(league.phase === 'regular_season' && next === 'playoffs'){
+    // simulate remaining weeks to complete season
+    const seasonLength = (league.settings && league.settings.seasonLength) || 10
+    console.log('advancePhase: simulating regular season up to', seasonLength, 'starting at week', league.week)
+    let safety = 0
+    while(league.week <= seasonLength && safety < 100){
+      const res = simulateWeek(league)
+      if(!res || !res.league) break
+      league = res.league
+      console.log('advancePhase: simulated week ->', league.week)
+      safety++
+    }
+    setPhase(league, 'playoffs')
+    return league
+  }
+
+  if(league.phase === 'playoffs' && next === 'offseason'){
+    // run playoffs, record champion, then advance season (aging etc.)
+    runPlayoffs(league)
+    advanceSeason(league)
+    setPhase(league, 'offseason')
+    return league
+  }
+
+  // fallback to cycling phase
+  setPhase(league, next)
+  return league
 }
