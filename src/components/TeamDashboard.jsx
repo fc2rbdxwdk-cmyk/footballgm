@@ -1,6 +1,7 @@
 import React from 'react'
 import PlayerCard from './PlayerCard'
 import StatLeaders from './StatLeaders'
+import PlayoffsBracket from './PlayoffsBracket' 
 
 export default function TeamDashboard({ league, onSimWeek, onViewRoster, onDraft, onViewPlayer }){
   const team = league.userTeam
@@ -47,6 +48,15 @@ export default function TeamDashboard({ league, onSimWeek, onViewRoster, onDraft
       <div className="panel">
         <h3>Notifications</h3>
         <div style={{color:'#BFBFBF'}}>{(league.notifications && league.notifications[0]?.text) || 'No notifications'}</div>
+      </div>
+
+      <div className="panel">
+        <h2>Playoffs</h2>
+        <PlayoffsBracket league={league} bracket={league.playoffBracket} onSimSeries={() => alert('Sim series not implemented yet')} onManualAdvance={() => alert('Manual advance not implemented yet')} />
+        <div style={{marginTop:8}}>
+          <button className="btn" onClick={() => onViewPlayoffs && onViewPlayoffs()}>View Full Bracket</button>
+        </div>
+      </div>
       </div>
     </div>
   )

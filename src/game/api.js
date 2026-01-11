@@ -86,7 +86,10 @@ export function createNewLeague({ numTeams = 8, seasonLength = 10, teamNames = [
   const prospects = Array.from({length:Math.max(10, Math.round(numTeams*1.5))}).map((_,i)=> makePlayer(null, sample(['QB','RB','WR','TE']), randInt(60,85), randInt(19,22)))
   // convert prospects to scouting-aware prospects
   const scoutedProspects = prospects.map(p => ({ id: p.id, name: p.name, pos: p.pos, trueOverall: p.overall, scoutGrade: Math.round(p.overall + randInt(-6,6)), scoutConfidence: 25, scoutHistory: [], age: p.age, archetype: sample(['workhorse','speedster','positional-blocker']), bustProbability: Math.max(0.02, (80 - p.overall)/180) }))
-  return { teams, userTeam, freeAgents, prospects: scoutedProspects, leagueName, settings: { difficulty: 1, seasonLength, salaryCap: true, salaryCapAmount: 100000, trainingRisk: 1, setupComplete: false }, week: 1, season: 1, phase: 'offseason', deadMoney: 0, tradeHistory: [], notifications: [], scoutingPoints: 10 }
+  // assign conferences and divisions (simple split)
+  const confNames = ['East','West']
+  teams.forEach((t, idx) => { t.conference = confNames[idx % confNames.length]; t.division = `Division ${Math.floor(idx/confNames.length)+1}` })
+  return { teams, userTeam, freeAgents, prospects: scoutedProspects, leagueName, settings: { difficulty: 1, seasonLength, salaryCap: true, salaryCapAmount: 100000, trainingRisk: 1, setupComplete: false, playoffSize: Math.min(4, numTeams), playoffSeriesLength: 1, playoffByConference: numTeams >= 6 }, week: 1, season: 1, phase: 'offseason', deadMoney: 0, tradeHistory: [], notifications: [], scoutingPoints: 10 }
 }
 
 export function addNotification(league, text){
@@ -536,8 +539,11 @@ export function simulateWeek(league) {
   nextLeague.week = (nextLeague.week || 1) + 1
   // persist recent boxscores
   nextLeague.recentBoxscores = nextLeague.recentBoxscores || []
-  nextLeague.recentBoxscores.unshift({ id: uid('bs_'), week: nextLeague.week, game, stats: game.stats })
+  nextLeague.recentBoxscores.unshift({ id: uid('bs_'), week: nextLeague.week, game, stats: game.stats, season: nextLeague.season })
   nextLeague.recentBoxscores = nextLeague.recentBoxscores.slice(0,12)
+  // persist full past games for head-to-head and SoS calculations
+  nextLeague.pastGames = nextLeague.pastGames || []
+  nextLeague.pastGames.push({ id: uid('pg_'), week: nextLeague.week, home: game.home, away: game.away, score: game.score, season: nextLeague.season })
   // apply random injuries after games
   const trainingRisk = (nextLeague.settings && nextLeague.settings.trainingRisk) || 1
   const injuredHome = maybeRandomInjuriesForTeam(userTeam, settings.difficulty, trainingRisk)
@@ -749,6 +755,26 @@ export function tradePlayers(league, teamAName, playerAId, teamBName, playerBId)
   return league
 }
 
+export function playerValueForTeam(league, team, p){
+  // compute a numeric valuation of player `p` for `team` (higher is better)
+  if(!p) return 0
+  const base = (p.overall || p.scoutGrade || 60) * 10
+  // youth premium: younger players add future value, but not absurdly
+  const age = p.age || 24
+  const youthBonus = Math.max(0, 28 - age) * 6
+  // positional need bonus: fewer players at pos => higher value
+  function countAtPos(team, pos){ return (team.roster||[]).filter(x=> x.pos === pos).length }
+  const needBonus = Math.max(0, 2 - countAtPos(team, p.pos)) * 110
+  // durability penalty for injury-prone players
+  const durability = p.hiddenTraits && p.hiddenTraits.injuryProne ? -60 : 0
+  // cost effect: prefer players whose expected annual cost is reasonable
+  const c = p.contract || {}
+  const annualCost = (c.salary || 0) + ((c.signingBonus && c.years) ? Math.round((c.signingBonus || 0) / Math.max(1, c.years)) : 0)
+  const costPenalty = Math.round(Math.min(400, annualCost / 30)) // scaled small penalty
+  const value = base + youthBonus + needBonus + durability - costPenalty
+  return Math.round(value)
+}
+
 export function evaluateTrade(league, offeringTeamName, receivingTeamName, offeringPlayerId, receivingPlayerId) {
   const offeringTeam = league.teams.find(t=>t.name===offeringTeamName) || (league.userTeam.name===offeringTeamName?league.userTeam:null)
   const receivingTeam = league.teams.find(t=>t.name===receivingTeamName) || (league.userTeam.name===receivingTeamName?league.userTeam:null)
@@ -757,41 +783,29 @@ export function evaluateTrade(league, offeringTeamName, receivingTeamName, offer
   const pRec = (receivingTeam.roster||[]).find(p=>p.id===receivingPlayerId)
   if(!pOff || !pRec) return { accepted:false, reason: 'Player not found' }
 
-  // existing evaluation logic...
+  // compute value from each team's perspective using playerValueForTeam (includes positional need & cost)
+  const valOff = playerValueForTeam(league, receivingTeam, pOff) // value of incoming player to receiving team
+  const valRec = playerValueForTeam(league, offeringTeam, pRec) // value of incoming player to offering team
 
-  // simple value function: base on overall and youth premium
-  function value(p){
-    const ageFactor = Math.max(0, 30 - (p.age || 25))
-    return (p.overall || 60) * 10 + ageFactor * 5
-  }
-
-  // positional need: teams value players more if they fill a weak position
   function countAtPos(team, pos){
     return (team.roster||[]).filter(p=>p.pos===pos).length
   }
 
-  const valOff = value(pOff)
-  const valRec = value(pRec)
-
   const needBonusForReceiving = Math.max(0, 2 - countAtPos(receivingTeam, pOff.pos)) * 140
   const needBonusForOffering = Math.max(0, 2 - countAtPos(offeringTeam, pRec.pos)) * 140
 
-  // From receiving team's perspective: they receive pOff and give away pRec
   // persona-driven preferences
   const persona = receivingTeam.persona || { style: 'balanced', aggressiveness: 0.5 }
   let personaBonus = 0
   if(persona.style === 'rebuild'){
-    // prefers youth: positive bonus if offering player is younger relative to receiving player
     personaBonus += ((30 - (pOff.age || 25)) - (30 - (pRec.age || 25))) * 6
   } else if(persona.style === 'win-now'){
-    // prefers immediate veteran performance
     personaBonus += ((pOff.age || 25) - (pRec.age || 25)) * 4
   }
 
   const receivingNet = valOff + needBonusForReceiving - valRec + personaBonus
 
   const difficulty = (league.settings && league.settings.difficulty) || 1
-  // teams with higher aggressiveness are more tolerant of net negatives (willing to gamble)
   const tolerance = 180 * (1 + difficulty * 0.45) * (1 + (persona.aggressiveness - 0.5) * 0.6)
 
   const accepted = receivingNet >= -tolerance
@@ -813,23 +827,269 @@ export function proposeTrade(league, offeringTeamName, receivingTeamName, offeri
   return { league, decision }
 }
 
-export function runPlayoffs(league){
-  // pick top 4 teams by record (userTeam included) for a simple semifinal->final bracket
+export function generatePlayoffBracket(league){
+  const size = (league.settings && league.settings.playoffSize) || 4
+  const byConf = (league.settings && league.settings.playoffByConference)
   const allTeams = [ ...(league.teams||[]), league.userTeam ].filter(Boolean)
-  const sorted = allTeams.sort((a,b)=> (b.record && b.record.w || 0) - (a.record && a.record.w || 0))
-  const top = sorted.slice(0,4)
-  if(top.length < 2) return { success:false, reason: 'Not enough teams' }
-  const semi1 = simulateGame(top[0], top[3], league.settings.difficulty)
-  const semi2 = simulateGame(top[1], top[2], league.settings.difficulty)
-  const winner1 = semi1.score[0] > semi1.score[1] ? top[0] : top[3]
-  const winner2 = semi2.score[0] > semi2.score[1] ? top[1] : top[2]
-  const final = simulateGame(winner1, winner2, league.settings.difficulty)
-  const champion = final.score[0] > final.score[1] ? winner1 : winner2
-  league.history = league.history || []
-  league.history.unshift({ season: league.season, champion: champion.name, finalScore: final.score })
-  addNotification(league, `${champion.name} won the championship for season ${league.season}!`)
+
+  function sortTeams(arr){
+    return arr.slice().sort((a,b)=>{
+      const aw = (a.record && a.record.w) || 0
+      const bw = (b.record && b.record.w) || 0
+      if(bw !== aw) return bw - aw
+
+      // tie-breaker 1: head-to-head (wins between the two teams this season)
+      const hhA = headToHeadWins(league, a.name, b.name)
+      const hhB = headToHeadWins(league, b.name, a.name)
+      if(hhA !== hhB) return hhB - hhA
+
+      // tie-breaker 2: divisional record (if same division)
+      if(a.division && b.division && a.division === b.division){
+        const divA = divisionRecord(league, a.name, a.division)
+        const divB = divisionRecord(league, b.name, b.division)
+        if(divB.w !== divA.w) return divB.w - divA.w
+      }
+
+      // tie-breaker 3: strength of schedule (avg opponent win % lower -> worse)
+      const sosA = strengthOfSchedule(league, a.name)
+      const sosB = strengthOfSchedule(league, b.name)
+      if(sosB !== sosA) return sosB - sosA
+
+      // tie-breaker 4: point differential
+      const apd = (a.pointsFor || 0) - (a.pointsAgainst || 0)
+      const bpd = (b.pointsFor || 0) - (b.pointsAgainst || 0)
+      if(bpd !== apd) return bpd - apd
+
+      return (b.name || '').localeCompare(a.name || '')
+    })
+  }
+
+  let seeds = []
+  if(byConf){
+    // produce seeds per conference with division winners prioritized
+    const confs = [...new Set(allTeams.map(t=>t.conference))]
+    const perConf = Math.max(1, Math.floor(size / confs.length))
+    confs.forEach(c => {
+      const confTeams = allTeams.filter(t=>t.conference===c)
+      // find division winners
+      const divisions = [...new Set(confTeams.map(t=>t.division))]
+      const divWinners = divisions.map(d=>{
+        const members = confTeams.filter(t=>t.division===d)
+        return sortTeams(members)[0]
+      }).filter(Boolean)
+      // sort division winners by record
+      const sortedDivWinners = sortTeams(divWinners)
+      seeds = seeds.concat(sortedDivWinners.slice(0, perConf))
+      // fill remaining spots for this conference with next-best teams (excluding division winners)
+      if(seeds.length < size){
+        const remaining = sortTeams(confTeams).filter(t=> !sortedDivWinners.find(s=>s.name===t.name))
+        seeds = seeds.concat(remaining.slice(0, Math.max(0, perConf - sortedDivWinners.length)))
+      }
+    })
+    // if not enough overall seeds, pad with next-best overall
+    if(seeds.length < size){
+      const remaining = sortTeams(allTeams).filter(t=> !seeds.find(s=>s.name===t.name))
+      seeds = seeds.concat(remaining.slice(0, size - seeds.length))
+    }
+  } else {
+    seeds = sortTeams(allTeams).slice(0, size)
+  }
+
+  // ensure unique and trimmed
+  seeds = seeds.slice(0, size)
+
+  // create bracket for single-elim: seed1 vs seedN, 2 vs N-1, etc.
+  const matchups = []
+  for(let i=0;i<Math.floor(seeds.length/2);i++){
+    const home = seeds[i]
+    const away = seeds[seeds.length - 1 - i]
+    matchups.push({ home: home.name, away: away.name, seedHome: i+1, seedAway: seeds.length - i })
+  }
+  return { size: seeds.length, matchups, seeds: seeds.map(s=>s.name) }
+}
+
+// Helper: count head-to-head wins for teamA against teamB across this season's pastGames
+export function headToHeadWins(league, teamAName, teamBName){
+  const games = (league.pastGames || []).filter(g => g.season === league.season && ((g.home === teamAName && g.away === teamBName) || (g.home === teamBName && g.away === teamAName)))
+  let wins = 0
+  games.forEach(g => {
+    if(g.home === teamAName && g.score[0] > g.score[1]) wins++
+    if(g.away === teamAName && g.score[1] > g.score[0]) wins++
+  })
+  return wins
+}
+
+// Helper: division record (w/l) for team within its division this season
+export function divisionRecord(league, teamName, division){
+  const teamsInDiv = (league.teams || []).filter(t=> t.division === division || (league.userTeam && league.userTeam.division === division))
+  const games = (league.pastGames || []).filter(g => g.season === league.season && ((g.home === teamName && teamsInDiv.find(t=>t.name===g.away)) || (g.away === teamName && teamsInDiv.find(t=>t.name===g.home))))
+  let w=0,l=0
+  games.forEach(g=>{
+    if(g.home === teamName){ if(g.score[0] > g.score[1]) w++ ; else l++ }
+    if(g.away === teamName){ if(g.score[1] > g.score[0]) w++ ; else l++ }
+  })
+  return { w, l }
+}
+
+// Helper: approximate strength of schedule based on opponents' current win percentage
+export function strengthOfSchedule(league, teamName){
+  const games = (league.pastGames || []).filter(g => g.season === league.season && (g.home === teamName || g.away === teamName))
+  const oppNames = games.map(g => g.home === teamName ? g.away : g.home)
+  if(oppNames.length === 0) return 0
+  const oppRecords = oppNames.map(name => { const t = (league.teams||[]).find(x=>x.name===name) || (league.userTeam && league.userTeam.name === name ? league.userTeam : null); const w = (t && t.record && t.record.w) || 0; const gplayed = ((t && t.record && (t.record.w + t.record.l)) || 1); return (w / gplayed) })
+  const avg = oppRecords.reduce((s,v)=>s+v,0)/oppRecords.length
+  return Math.round(avg*100)/100
+}
+
+export function runPlayoffs(league){
+  const bracket = generatePlayoffBracket(league)
+  if(!bracket || bracket.size < 2) return { success:false, reason: 'Not enough teams' }
+  const seriesLen = (league.settings && league.settings.playoffSeriesLength) || 1
+
+  // simulate rounds
+  let currentMatchups = bracket.matchups
+  while(currentMatchups.length >= 1){
+    const winners = []
+    for(const m of currentMatchups){
+      let winsA = 0, winsB = 0
+      // best-of series
+      while(winsA < Math.ceil(seriesLen/2) && winsB < Math.ceil(seriesLen/2)){
+        const tA = (league.teams||[]).find(t=>t.name===m.home) || (league.userTeam && league.userTeam.name === m.home ? league.userTeam : null)
+        const tB = (league.teams||[]).find(t=>t.name===m.away) || (league.userTeam && league.userTeam.name === m.away ? league.userTeam : null)
+        const g = simulateGame(tA, tB, league.settings.difficulty)
+        if(g.score[0] > g.score[1]) winsA++
+        else winsB++
+      }
+      const winner = winsA > winsB ? m.home : m.away
+      winners.push(winner)
+    }
+    // create next round matchups
+    const next = []
+    for(let i=0;i<Math.floor(winners.length/2);i++){
+      next.push({ home: winners[i], away: winners[winners.length - 1 - i] })
+    }
+    if(next.length === 0){
+      // final winner
+      const champName = winners[0]
+      const champTeam = (league.teams||[]).find(t=>t.name===champName) || (league.userTeam && league.userTeam.name === champName ? league.userTeam : null)
+      league.history = league.history || []
+      league.history.unshift({ season: league.season, champion: champName })
+      addNotification(league, `${champName} won the championship for season ${league.season}!`)
+      saveLeague(league)
+      return { success:true, champion: champName }
+    }
+    currentMatchups = next
+  }
+  return { success:false, reason: 'Playoff simulation error' }
+}
+
+export function teamPayroll(league, team){
+  // simple payroll: sum salary + amortized signing bonus for current season
+  if(!team || !Array.isArray(team.roster)) return 0
+  const seasonYear = league.season || 1
+  let payroll = 0
+  (team.roster || []).forEach(p=>{
+    const c = p.contract || {}
+    payroll += (c.salary || 0)
+    if(c.signingBonus && c.years){
+      const yearsElapsed = Math.max(0, (seasonYear - (c.startSeason || seasonYear)))
+      if(yearsElapsed < c.years) payroll += Math.round((c.signingBonus || 0) / c.years)
+    }
+  })
+  return payroll
+}
+
+export function canAffordSigning(league, team, cost){
+  const capEnabled = league.settings && league.settings.salaryCap
+  const capAmount = (league.settings && league.settings.salaryCapAmount) || 100000
+  const payroll = teamPayroll(league, team)
+  if(team.balance == null) team.balance = 0
+  if(cost > team.balance) return false
+  if(!capEnabled) return true
+  // if signing would push over cap, allow if team's persona aggressiveness > 0.7 (willing to gamble)
+  if((payroll + cost) <= capAmount) return true
+  const persona = team.persona || { aggressiveness: 0.5 }
+  return persona.aggressiveness > 0.7
+}
+
+export function autoSignFreeAgents(league){
+  league.freeAgents = league.freeAgents || []
+  ;(league.teams || []).forEach(team => {
+    if(league.userTeam && team.name === league.userTeam.name) return
+    const persona = team.persona || { style: 'balanced', aggressiveness: 0.5 }
+    // compute a threshold: lower for aggressive teams
+    const baseThreshold = 0.12
+    const threshold = baseThreshold * (1 - (persona.aggressiveness - 0.4) * 0.6)
+
+    // sort free agents by expected value-to-cost ratio for this team
+    const scored = league.freeAgents.map(fa => {
+      const val = playerValueForTeam(league, team, fa)
+      const annualCost = (fa.contract && fa.contract.salary) || 4000
+      const score = annualCost > 0 ? (val / annualCost) : val
+      return { fa, val, annualCost, score }
+    }).sort((a,b)=> b.score - a.score)
+
+    if(scored.length === 0) return
+    const best = scored[0]
+    if(best.score >= threshold && canAffordSigning(league, team, best.annualCost)){
+      // sign
+      league.freeAgents = league.freeAgents.filter(p=> p.id !== best.fa.id)
+      team.roster.push({ ...best.fa, teamColor: team.color })
+      team.balance = (team.balance || 0) - best.annualCost
+      addNotification(league, `${team.name} (AI) signed ${best.fa.name} for $${(best.annualCost||0).toLocaleString()} (value ${best.val})`)
+    }
+  })
   saveLeague(league)
-  return { success:true, champion: champion.name }
+  return league
+}
+
+export function autoProposeTrades(league, attempts = 3){
+  const teams = league.teams || []
+  for(let i=0;i<attempts;i++){
+    const a = sample(teams)
+    let b = sample(teams)
+    if(!a || !b || a.name === b.name) continue
+    // target a valuable player on b
+    const target = (b.roster || []).slice().sort((x,y)=> (y.overall||60)-(x.overall||60))[0]
+    if(!target) continue
+    // choose candidate offering players from a: try low-end first, then mid-range if low-end declined
+    const offeringCandidates = (a.roster || []).slice().sort((x,y)=> (x.overall||60)-(y.overall||60))
+    let traded = false
+    for(let j=0;j<Math.min(3, offeringCandidates.length); j++){
+      const offer = offeringCandidates[j]
+      // if persona is very aggressive, they may offer a mid-tier player to pry loose stars
+      if(a.persona && a.persona.aggressiveness > 0.7 && offeringCandidates.length > 2 && j === 0){
+        // select a slightly better offering player
+        const mid = offeringCandidates[Math.min(offeringCandidates.length-1, 1)]
+        if(mid) {
+          const evalResMid = evaluateTrade(league, a.name, b.name, mid.id, target.id)
+          if(evalResMid.accepted){ tradePlayers(league, a.name, mid.id, b.name, target.id); traded = true; break }
+        }
+      }
+
+      const evalRes = evaluateTrade(league, a.name, b.name, offer.id, target.id)
+      if(evalRes.accepted){
+        tradePlayers(league, a.name, offer.id, b.name, target.id)
+        traded = true
+        break
+      }
+    }
+    if(!traded){
+      // attempt reverse: maybe b will be willing to give a bench piece for a good player
+      const target2 = (a.roster || []).slice().sort((x,y)=> (y.overall||60)-(x.overall||60))[0]
+      const offeringCandidatesB = (b.roster || []).slice().sort((x,y)=> (x.overall||60)-(y.overall||60))
+      for(let j=0;j<Math.min(2, offeringCandidatesB.length); j++){
+        const offerB = offeringCandidatesB[j]
+        const evalResB = evaluateTrade(league, b.name, a.name, offerB.id, target2.id)
+        if(evalResB.accepted){
+          tradePlayers(league, b.name, offerB.id, a.name, target2.id)
+          break
+        }
+      }
+    }
+  }
+  saveLeague(league)
+  return league
 }
 
 export function advancePhase(league){
@@ -857,6 +1117,9 @@ export function advancePhase(league){
   if(league.phase === 'free_agency' && next === 'roster_management'){
     // allow roster moves; pick up remaining FAs for AI teams automatically
     ;(league.teams||[]).forEach(t=> ensureFreeAgents(league, 2))
+    // perform AI offseason behavior: auto-sign FAs and propose simple trades
+    autoSignFreeAgents(league)
+    autoProposeTrades(league, 4)
     setPhase(league, 'roster_management')
     return league
   }

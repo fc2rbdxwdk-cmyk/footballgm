@@ -1,5 +1,5 @@
 import assert from 'assert'
-import { createNewLeague, evaluateTrade, proposeTrade, simulateGame, advancePhase, runPlayoffs } from './api.js'
+import { createNewLeague, evaluateTrade, proposeTrade, simulateGame, advancePhase, runPlayoffs, playerValueForTeam, autoSignFreeAgents, autoProposeTrades } from './api.js'
 import { simulateWeek, proposeContract, signFreeAgent, setInjuryWeeks, clearInjury, signDraftPick } from './api.js'
 import { scoutProspect, generateProspects, getScoutReport } from './api.js'
 
@@ -188,6 +188,99 @@ function testPersonaInfluence(){
   const post = evaluateTrade(league, user.name, opponent.name, myPlayer.id, theirPlayer.id)
   assert.ok(post.diff >= base.diff)
   console.log('testPersonaInfluence: persona modified trade diff as expected', base.diff, '->', post.diff)
+}
+
+function testPlayerValuation(){
+  const league = createNewLeague()
+  const t = league.teams[0]
+  const pLow = { id: 'p_low', overall: 60, age: 26, pos: 'RB', contract: { salary: 3000 } }
+  const pHigh = { id: 'p_high', overall: 82, age: 23, pos: 'RB', contract: { salary: 5000 }, hiddenTraits: { injuryProne: false } }
+  const vLow = playerValueForTeam(league, t, pLow)
+  const vHigh = playerValueForTeam(league, t, pHigh)
+  assert.ok(typeof vLow === 'number' && typeof vHigh === 'number')
+  assert.ok(vHigh > vLow)
+  console.log('testPlayerValuation: values computed', vLow, vHigh)
+}
+
+function testGenerateBracket(){
+  const league = createNewLeague()
+  // assign artificial records for deterministic seeding
+  // create 2 conferences with 2 divisions each, and ensure a division winner with lower wins than a wild-card
+  league.teams.forEach((t,i)=> { t.record = { w: (i % 4 === 0 ? 6 : 8) }; t.pointsFor = 100 + i; t.pointsAgainst = 50 + i })
+  league.userTeam.record = { w: 9 }
+  league.settings.playoffSize = 4
+  league.settings.playoffByConference = true
+  // mark divisions so we have clear division winners
+  league.teams[0].division = 'A'; league.teams[1].division = 'A'
+  league.teams[2].division = 'B'; league.teams[3].division = 'B'
+  league.teams[4].division = 'C'; league.teams[5].division = 'C'
+
+  // create a head-to-head game where team 1 beat team 2 this season
+  league.pastGames = league.pastGames || []
+  const t1 = league.teams[0].name, t2 = league.teams[1].name
+  league.pastGames.push({ week:1, home: t1, away: t2, score: [21,14], season: league.season })
+
+  const bracket = generatePlayoffBracket(league)
+  assert.strictEqual(bracket.size, 4)
+  // ensure division winners are present among seeds
+  const seeds = bracket.seeds
+  assert.ok(seeds.includes(league.teams[0].name) || seeds.includes(league.teams[1].name))
+
+  // test head-to-head tiebreak: swap records to tie team 0 and team 1
+  league.teams[0].record = { w: 7 }
+  league.teams[1].record = { w: 7 }
+  const sorted = (generatePlayoffBracket(league).seeds)
+  // team0 beat team1 head-to-head so team0 should be ahead
+  assert.ok(sorted.indexOf(t1) < sorted.indexOf(t2))
+  console.log('testGenerateBracket passed (division winner & head-to-head)')
+}
+
+function testRunPlayoffs(){
+  const league = createNewLeague()
+  league.teams.forEach((t,i)=> { t.record = { w: (league.teams.length - i) }; t.pointsFor = 100 + i; t.pointsAgainst = 50 + i })
+  league.userTeam.record = { w: league.teams.length }
+  league.settings.playoffSize = 4
+  const res = runPlayoffs(league)
+  assert.ok(res.success)
+  assert.ok(league.history && league.history[0] && league.history[0].champion)
+  console.log('testRunPlayoffs: champion recorded:', league.history[0].champion)
+}
+
+function testAISigning(){
+  const league = createNewLeague()
+  // put a strong free agent available
+  league.freeAgents = league.freeAgents || []
+  const star = { id: 'fa_x', name: 'Star FA', pos: 'RB', trueOverall: 85, contract: { salary: 5000 } }
+  league.freeAgents.unshift(star)
+  // give an AI team low depth at RB and funds
+  const ai = league.teams[1]
+  ai.balance = 20000
+  ai.roster = ai.roster.filter(p=> p.pos !== 'RB')
+  ai.persona = { style: 'win-now', aggressiveness: 0.8 }
+  const beforeFA = league.freeAgents.length
+  autoSignFreeAgents(league)
+  // ensure FA was signed by AI team
+  const signed = (ai.roster || []).find(p=> p.id === 'fa_x')
+  assert.ok(signed)
+  assert.strictEqual(league.freeAgents.length, beforeFA - 1)
+  console.log('testAISigning passed: AI signed free agent')
+}
+
+function testAIProposeTrades(){
+  const league = createNewLeague()
+  league.teams.forEach(t=> t.balance = 100000)
+  league.tradeHistory = league.tradeHistory || []
+  const beforeTrades = league.tradeHistory.length
+  autoProposeTrades(league, 10)
+  // trades may or may not happen; just ensure no errors and tradeHistory defined
+  assert.ok(Array.isArray(league.tradeHistory))
+  const after = league.tradeHistory.length
+  if(after > beforeTrades){
+    // ensure trade entries present with id & time
+    const recent = league.tradeHistory[0]
+    assert.ok(recent.id && recent.time)
+  }
+  console.log('testAIProposeTrades passed (no errors)')
 }
 
 function testPhaseTransitions(){
