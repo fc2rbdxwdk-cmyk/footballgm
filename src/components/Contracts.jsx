@@ -1,11 +1,15 @@
-import React, { useState } from 'react'
+import React, { useState, useMemo } from 'react'
+import { getCapProjection } from '../game/api'
 
 export default function Contracts({ league, onBack, onUpdate }){
   const team = league.userTeam || {}
   const roster = team.roster || []
+  const projection = useMemo(()=> getCapProjection(league, 3), [league])
   const [selected, setSelected] = useState(null)
   const [years, setYears] = useState(2)
   const [salary, setSalary] = useState(4000)
+  const [bonus, setBonus] = useState(2000)
+  const [guaranteed, setGuaranteed] = useState(2000)
 
   function totalSalaryForYear(yearOffset){
     // naive projection: current contracts for all players
@@ -14,9 +18,19 @@ export default function Contracts({ league, onBack, onUpdate }){
 
   function handlePropose(){
     if(!selected) return
-    onUpdate && onUpdate('proposeContract', { playerId: selected.id, years: Number(years), salary: Number(salary) })
+    onUpdate && onUpdate('proposeContract', { playerId: selected.id, years: Number(years), salary: Number(salary), signingBonus: Number(bonus), guaranteed: Number(guaranteed) })
     setSelected(null)
   }
+
+  const capAmount = league.settings?.salaryCapAmount || 0
+  const firstYearPayrollIfProposed = (()=>{
+    if(!selected) return projection[0]?.payroll || 0
+    const current = projection[0]?.payroll || 0
+    const amort = Math.round((Number(bonus) || 0)/Math.max(1, Number(years) || 1))
+    return current + amort + (Number(salary) || 0)
+  })()
+  const overCap = capAmount > 0 && firstYearPayrollIfProposed > capAmount
+
 
   return (
     <div className="panel contracts-view">
@@ -52,7 +66,18 @@ export default function Contracts({ league, onBack, onUpdate }){
           <div className="panel" style={{padding:12}}>
             <h3>Team Budget</h3>
             <div style={{color:'#BFBFBF',marginTop:6}}>Balance: <strong>${Number(team.balance||0).toLocaleString()}</strong></div>
-            <div style={{marginTop:8,color:'#BFBFBF'}}>Projected payroll (current): <strong>${totalSalaryForYear(0).toLocaleString()}</strong></div>
+            <div style={{marginTop:8,color:'#BFBFBF'}}>Projected payroll:</div>
+            <div style={{marginTop:8}}>
+              {projection.map(p => (
+                <div key={p.season} style={{display:'flex',justifyContent:'space-between'}}>
+                  <div style={{color:'#BFBFBF'}}>Season {p.season}</div>
+                  <div><strong>${p.payroll.toLocaleString()}</strong></div>
+                </div>
+              ))}
+              {league.settings && league.settings.salaryCapAmount && (
+                <div style={{marginTop:8,color:'#BFBFBF'}}>Salary Cap: <strong>${league.settings.salaryCapAmount.toLocaleString()}</strong></div>
+              )}
+            </div>
           </div>
 
           <div className="panel" style={{padding:12,marginTop:12}}>
@@ -68,9 +93,20 @@ export default function Contracts({ league, onBack, onUpdate }){
                   <label style={{display:'block'}}>Annual Salary</label>
                   <input type="number" min={500} step={500} value={salary} onChange={e=>setSalary(Number(e.target.value))} />
                 </div>
-                <div style={{marginTop:12,display:'flex',gap:8}}>
-                  <button className="btn primary" onClick={handlePropose}>Propose Contract</button>
-                  <button className="btn" onClick={()=> setSelected(null)}>Cancel</button>
+                <div style={{marginTop:8}}>
+                  <label style={{display:'block'}}>Signing Bonus</label>
+                  <input type="number" min={0} step={500} value={bonus} onChange={e=>setBonus(Number(e.target.value))} />
+                </div>
+                <div style={{marginTop:8}}>
+                  <label style={{display:'block'}}>Guaranteed</label>
+                  <input type="number" min={0} step={500} value={guaranteed} onChange={e=>setGuaranteed(Number(e.target.value))} />
+                </div>
+                <div style={{marginTop:12,display:'flex',gap:8,flexDirection:'column'}}>
+                  {overCap && <div style={{color:'#FFCC00',fontWeight:700}}>Warning: this contract would push payroll over the salary cap for next season.</div>}
+                  <div style={{display:'flex',gap:8}}>
+                    <button className="btn primary" onClick={handlePropose}>Propose Contract</button>
+                    <button className="btn" onClick={()=> setSelected(null)}>Cancel</button>
+                  </div>
                 </div>
               </div>
             ) : (

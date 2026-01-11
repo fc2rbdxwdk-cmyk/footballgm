@@ -161,7 +161,7 @@ export default function App() {
           <TeamDashboard league={league} onSimWeek={handleSimWeek} onViewRoster={() => go(VIEWS.ROSTER)} onDraft={handleStartDraft} onViewPlayer={handleViewPlayer} />
         )}
         {view === VIEWS.ROSTER && <Roster team={league.userTeam} onBack={() => go(VIEWS.DASH)} onUpdate={(t) => setLeague(l => ({ ...l, userTeam: t }))} />}
-        {view === VIEWS.DRAFT && <Draft league={league} onBack={() => go(VIEWS.DASH)} onDraftPick={(teamName, player) => { const updated = signDraftPick(JSON.parse(JSON.stringify(league)), player); setLeague(updated) }} />}
+        {view === VIEWS.DRAFT && <Draft league={league} onBack={() => go(VIEWS.DASH)} onLeagueUpdate={(l) => { setLeague(l); saveLeague(l) }} />}
         {view === VIEWS.FA && <FreeAgency league={league} onSign={(player) => { const updated = signFreeAgent(JSON.parse(JSON.stringify(league)), player); setLeague(updated) }} onBack={() => go(VIEWS.DASH)} />}
         {view === VIEWS.RESULTS && <GameResult summary={lastResults} onBack={() => go(VIEWS.DASH)} />}
         {view === VIEWS.SETTINGS && <Settings settings={league.settings} onChange={handleUpdateSettings} onBack={() => go(VIEWS.DASH)} />}
@@ -171,7 +171,7 @@ export default function App() {
         {view === VIEWS.BOXES && <BoxscoreHistory league={league} onOpen={(box)=>{ setLastResults({ game: box.game, week: box.week, stats: box.stats }); setView(VIEWS.RESULTS) }} />}
         {view === VIEWS.CONTRACTS && <Contracts league={league} onBack={() => go(VIEWS.DASH)} onUpdate={(action, payload) => {
           if(action === 'proposeContract'){
-            const res = proposeContract(JSON.parse(JSON.stringify(league)), payload.playerId, payload.years, payload.salary)
+            const res = proposeContract(JSON.parse(JSON.stringify(league)), payload.playerId, payload.years, payload.salary, payload.signingBonus, payload.guaranteed)
             if(res.success){ setLeague(loadLeague()) } else { setLeague(loadLeague()) }
           }
         }} />}
