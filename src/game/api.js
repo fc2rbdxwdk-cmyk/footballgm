@@ -42,7 +42,22 @@ function randomName(){ return `${sample(FIRSTS)} ${sample(LASTS)}` }
 
 function makePlayer(name, pos='RB', overall=70, age=24, teamColor = '#444', salaryOverride) {
   const n = name || randomName()
-  return { id: uid('p_'), name: n, pos, overall, age, contract: { years: 2, salary: salaryOverride || randInt(4000,12000) }, starter: false, injury: null, teamColor, seasonStats: { games:0, passY:0, passTD:0, int:0, rushY:0, rushTD:0, recY:0, recTD:0, tackles:0, sacks:0 } }
+  // add positional attributes and hidden traits
+  const attributes = {
+    speed: randInt(40, 95),
+    strength: randInt(40,95),
+    awareness: randInt(40,95),
+    hands: randInt(40,95),
+    coverage: randInt(40,95),
+    durability: randInt(40,95)
+  }
+  const hiddenTraits = {
+    injuryProne: Math.random() < 0.08,
+    clutch: Math.random() < 0.12,
+    consistency: Math.random() < 0.7,
+    leader: Math.random() < 0.15
+  }
+  return { id: uid('p_'), name: n, pos, overall, age, attributes, hiddenTraits, contract: { years: 2, salary: salaryOverride || randInt(4000,12000), signingBonus:0, guaranteed:0, startSeason: null }, starter: false, injury: null, teamColor, seasonStats: { games:0, passY:0, passTD:0, int:0, rushY:0, rushTD:0, recY:0, recTD:0, tackles:0, sacks:0 } }
 }
 
 function makeTeam(name, color) {
@@ -57,6 +72,11 @@ export function createNewLeague({ numTeams = 8, seasonLength = 10, teamNames = [
   numTeams = Math.max(4, Math.min(20, Number(numTeams)))
   const names = teamNames.slice(0, numTeams)
   const teams = names.map((n, i) => makeTeam(n, TEAM_COLORS[i % TEAM_COLORS.length]))
+  // assign simple AI personas to teams (influences trade acceptance & drafting). User team is balanced by default.
+  const personaOptions = ['win-now','balanced','rebuild']
+  teams.forEach((t, idx) => {
+    t.persona = { style: idx===0 ? 'balanced' : sample(personaOptions), aggressiveness: idx===0 ? 0.5 : (0.3 + Math.random()*0.7) }
+  })
   const userTeam = { ...teams[0], balance: 100000 }
   // ensure every player's teamColor set
   teams.forEach(t => t.roster.forEach(p => p.teamColor = t.color))
@@ -64,7 +84,9 @@ export function createNewLeague({ numTeams = 8, seasonLength = 10, teamNames = [
 
   const freeAgents = Array.from({length:Math.max(8, Math.round(numTeams*1.2))}).map((_,i)=> makePlayer(null, sample(['QB','RB','WR','TE']), randInt(55,78), randInt(21,33)))
   const prospects = Array.from({length:Math.max(10, Math.round(numTeams*1.5))}).map((_,i)=> makePlayer(null, sample(['QB','RB','WR','TE']), randInt(60,85), randInt(19,22)))
-  return { teams, userTeam, freeAgents, prospects, leagueName, settings: { difficulty: 1, seasonLength, salaryCap: false, trainingRisk: 1, setupComplete: false }, week: 1, tradeHistory: [], notifications: [] }
+  // convert prospects to scouting-aware prospects
+  const scoutedProspects = prospects.map(p => ({ id: p.id, name: p.name, pos: p.pos, trueOverall: p.overall, scoutGrade: Math.round(p.overall + randInt(-6,6)), scoutConfidence: 25, age: p.age, archetype: sample(['workhorse','speedster','positional-blocker']), bustProbability: Math.max(0.02, (80 - p.overall)/180) }))
+  return { teams, userTeam, freeAgents, prospects: scoutedProspects, leagueName, settings: { difficulty: 1, seasonLength, salaryCap: true, salaryCapAmount: 100000, trainingRisk: 1, setupComplete: false }, week: 1, season: 1, deadMoney: 0, tradeHistory: [], notifications: [], scoutingPoints: 10 }
 }
 
 export function addNotification(league, text){
@@ -139,8 +161,182 @@ export function getPlayerById(league, id){
   return all.find(p=>p.id===id) || null
 }
 
+// Draft utilities
+export function createDraftBoard(league, rounds = 3){
+  const teams = [ ...(league.teams||[]), league.userTeam ].map(t=> t.name)
+  const board = []
+  for(let r=1;r<=rounds;r++){
+    for(let i=0;i<teams.length;i++){
+      const pickNumber = (r-1) * teams.length + (i+1)
+      board.push({ id: uid('pick_'), round: r, pickNumber, owner: teams[i], originalOwner: teams[i], playerId: null, locked: false })
+    }
+  }
+  return board
+}
+
+export function startDraft(league, rounds = 3){
+  league.draft = league.draft || {}
+  league.draft.rounds = rounds
+  league.draft.board = createDraftBoard(league, rounds)
+  league.draft.started = false
+  league.draft.currentPickIndex = 0
+  saveLeague(league)
+  return league
+}
+
+export function tradePicks(league, pickIdA, pickIdB){
+  // only allowed before draft starts
+  if(league.draft && league.draft.started) return { success:false, reason: 'Draft already started' }
+  const a = (league.draft && league.draft.board||[]).find(p=>p.id===pickIdA)
+  const b = (league.draft && league.draft.board||[]).find(p=>p.id===pickIdB)
+  if(!a || !b) return { success:false, reason: 'Pick not found' }
+
+  // If either owner is an AI team (not user), evaluate acceptance for that owner
+  function pickValue(pick){
+    // value is higher for earlier picks; include round/pickNumber
+    return 1000 / (pick.pickNumber) + (30 - pick.round)
+  }
+
+  const difficulty = (league.settings && league.settings.difficulty) || 1
+  // check acceptance for owner of A receiving B
+  const ownerA = a.owner
+  const ownerB = b.owner
+
+  let accept = true
+  // if ownerB is not the same as owner of A (i.e., a trade will affect AI), do a simple evaluation
+  if(ownerB !== ownerA){
+    const valForB = pickValue(b) - pickValue(a)
+    // tolerance influenced by difficulty: higher difficulty -> less willing to accept bad deals
+    const tolerance = 20 * (1 + difficulty * 0.5)
+    if(valForB < -tolerance) accept = false
+  }
+
+  if(!accept) return { success:false, reason: 'Offer declined by AI' }
+
+  // swap owners
+  const tmp = a.owner
+  a.owner = b.owner
+  b.owner = tmp
+  saveLeague(league)
+  addNotification(league, `Picks traded: ${a.round}.${a.pickNumber} ↔ ${b.round}.${b.pickNumber}`)
+  return { success:true }
+}
+
+export function aiSelectProspect(league, teamName){
+  const team = (league.teams||[]).find(t=>t.name===teamName) || (league.userTeam && league.userTeam.name === teamName ? league.userTeam : null)
+  if(!team) return null
+  // simple AI ranking: public scoutGrade, youth bonus for rebuild persona, position need bonus
+  const persona = team.persona || { style: 'balanced', aggressiveness: 0.5 }
+  function posNeedBonus(p){
+    const count = (team.roster||[]).filter(x=>x.pos===p.pos).length
+    return Math.max(0, 2 - count) * 20
+  }
+  const ranked = (league.prospects||[]).map(p=>{
+    let score = (p.scoutGrade || p.trueOverall || 60) * 2
+    if(persona.style === 'rebuild') score += (30 - (p.age||21)) * 3
+    if(persona.style === 'win-now') score += ((p.age||25) - 24) * 1.5
+    score += posNeedBonus(p)
+    score -= p.bustProbability * 50
+    return { id: p.id, score }
+  }).sort((a,b)=> b.score - a.score)
+  return ranked.length ? ranked[0].id : null
+}
+
+export function beginDraft(league){
+  if(!league.draft || !league.draft.board) startDraft(league, league.draft?.rounds || 3)
+  league.draft.started = true
+  league.draft.currentPickIndex = 0
+
+  // auto-pick for AI teams until it becomes the user's pick or draft completes
+  function current(){ return (league.draft && league.draft.board && league.draft.board[league.draft.currentPickIndex]) || null }
+  let cp = current()
+  const userName = league.userTeam && league.userTeam.name
+  while(cp && cp.owner !== userName){
+    const chosen = aiSelectProspect(league, cp.owner) || (league.prospects && league.prospects[0] && league.prospects[0].id)
+    if(!chosen) break
+    performDraftPick(league, cp.id, chosen)
+    cp = current()
+  }
+
+  saveLeague(league)
+  return league
+}
+
+export function currentPick(league){
+  return (league.draft && league.draft.board && league.draft.board[league.draft.currentPickIndex]) || null
+}
+
+export function performDraftPick(league, pickId, playerId){
+  if(!league.draft || !league.draft.started) return { success:false, reason: 'Draft not started' }
+  const pick = league.draft.board.find(p=>p.id===pickId)
+  if(!pick) return { success:false, reason: 'Pick not found' }
+  if(pick.playerId) return { success:false, reason: 'Pick already used' }
+  // assign player
+  pick.playerId = playerId
+  // move player from prospects to owner's roster
+  const player = league.prospects.find(p=>p.id===playerId)
+  if(!player) return { success:false, reason: 'Player not found' }
+  // find owning team object
+  const teamObj = (league.teams||[]).find(t=>t.name===pick.owner) || (league.userTeam && league.userTeam.name === pick.owner ? league.userTeam : null)
+  if(!teamObj) return { success:false, reason: 'Team not found' }
+  // reveal true overall (we set actual True overall earlier) and convert to player object
+  const newPlayer = { ...player, overall: player.trueOverall, contract: { years: 2, salary: Math.round(4000 + (player.trueOverall-60)*120), signingBonus:0, guaranteed:0, startSeason: league.season || 1 }, starter: false }
+  teamObj.roster.push(newPlayer)
+  // remove from prospects
+  league.prospects = league.prospects.filter(p=>p.id !== playerId)
+  // advance current pick
+  league.draft.currentPickIndex = Math.min(league.draft.board.length-1, (league.draft.currentPickIndex||0) + 1)
+  saveLeague(league)
+  addNotification(league, `${teamObj.name} selected ${newPlayer.name} (${newPlayer.pos}) with pick ${pick.round}.${pick.pickNumber}`)
+  return { success:true }
+}
+
+export function draftBoardForTeam(league, teamName){
+  return (league.draft && league.draft.board || []).filter(p=> p.owner === teamName)
+} 
+
+export function scoutProspect(league, prospectId, points){
+  league.scoutingPoints = league.scoutingPoints || 0
+  if(points > league.scoutingPoints) return { success:false, reason: 'Not enough scouting points' }
+  league.scoutingPoints -= points
+  const p = (league.prospects||[]).find(x=>x.id === prospectId)
+  if(!p) return { success:false, reason: 'Prospect not found' }
+  // reduce scoutConfidence and adjust scoutGrade toward trueOverall
+  const reduction = Math.min(20, points * 2)
+  p.scoutConfidence = Math.max(5, p.scoutConfidence - reduction)
+  // nudge scoutGrade toward trueOverall
+  const delta = Math.round((p.trueOverall - p.scoutGrade) * (reduction / 100))
+  p.scoutGrade = p.scoutGrade + delta
+  // record scouting source entry
+  p.scoutHistory = p.scoutHistory || []
+  p.scoutHistory.push({ id: uid('sh_'), points, type: points >= 10 ? 'national' : 'regional', grade: p.scoutGrade, uncertainty: p.scoutConfidence, ts: Date.now() })
+  addNotification(league, `Scouted ${p.name}: confidence now ${p.scoutConfidence}%`) 
+  saveLeague(league)
+  return { success:true }
+}
+
 export function generateProspects(count = 4) {
-  return Array.from({length:count}).map((_,i)=> ({ id: uid('pr_'), name: `Rookie ${uid('')}`, pos: sample(['QB','RB','WR','TE']), overall: randInt(60,88), age: randInt(19,22) }))
+  // Returns prospects with hidden trueOverall and public scoutGrade +/- confidence
+  const positions = ['QB','RB','WR','TE','OL','DL','LB','CB']
+  const archetypes = ['workhorse','speedster','speedy','positional-blocker','coverage-specialist','big-play-wr','dual-threat-qb']
+  return Array.from({length:count}).map((_,i)=>{
+    const pos = sample(positions)
+    const trueOverall = randInt(58,92)
+    // scouting adds noise; scouts give a grade and confidence
+    const confidence = Math.max(5, Math.min(35, Math.round((Math.random()*0.25 + 0.05)*100))) // percent
+    const grade = Math.round(trueOverall + randInt(-Math.round(12*confidence/100), Math.round(12*confidence/100)))
+    const bustProbability = Math.max(0.02, (80 - trueOverall) / 180) // higher for lower trueOverall
+    const archetype = sample(archetypes)
+    return { id: uid('pr_'), name: `Rookie ${uid('')}`, pos, trueOverall, scoutGrade: grade, scoutConfidence: confidence, scoutHistory: [], age: randInt(19,22), archetype, bustProbability }
+  })
+} 
+
+export function getScoutReport(league, prospectId){
+  const p = (league.prospects||[]).find(x=>x.id === prospectId)
+  if(!p) return { success:false, reason: 'Prospect not found' }
+  // we keep `scoutConfidence` as uncertainty (lower = better); report flips to conventional confidence (higher=better)
+  const confidence = Math.max(0, Math.min(100, 100 - (p.scoutConfidence || 25)))
+  return { success:true, grade: p.scoutGrade, confidence, sources: p.scoutHistory || [] }
 }
 
 function teamStrength(team) {
@@ -375,24 +571,118 @@ export function signDraftPick(league, player) {
   return league
 }
 
-export function proposeContract(league, playerId, years, salary){
-  // propose/accept a simple contract: set years and salary and adjust balance by a one-time signing bonus (1yr salary portion)
+export function proposeContract(league, playerId, years, salary, signingBonus = null, guaranteed = null){
+  // propose/accept a contract with signing bonus and guarantees
   const p = getPlayerById(league, playerId)
   if(!p) return { success:false, reason: 'Player not found' }
-  const signingBonus = Math.round(salary * 0.5) // 50% of annual as signing cost
+  signingBonus = signingBonus == null ? Math.round(salary * 0.5) : Number(signingBonus)
+  guaranteed = guaranteed == null ? signingBonus : Number(guaranteed)
+
   league.userTeam.balance = league.userTeam.balance || 0
   if(signingBonus > league.userTeam.balance){
     addNotification(league, `Unable to sign ${p.name}. Insufficient funds for signing bonus ($${(league.userTeam.balance||0).toLocaleString()})`)
     saveLeague(league)
     return { success:false, reason: 'Insufficient funds' }
   }
+
   league.userTeam.balance -= signingBonus
   // find player reference in roster to update
   const pl = (league.userTeam.roster||[]).find(x=>x.id===playerId)
-  if(pl){ pl.contract = { years: Number(years), salary: Number(salary) } }
-  addNotification(league, `${p.name} signed ${years}y @ $${Number(salary).toLocaleString()} (bonus $${signingBonus.toLocaleString()}). New balance: $${(league.userTeam.balance||0).toLocaleString()}`)
+  const startSeason = league.season || 1
+  if(pl){ pl.contract = { years: Number(years), salary: Number(salary), signingBonus: signingBonus, guaranteed: guaranteed, startSeason } }
+  addNotification(league, `${p.name} signed ${years}y @ $${Number(salary).toLocaleString()} (bonus $${signingBonus.toLocaleString()}, guaranteed $${guaranteed.toLocaleString()}). New balance: $${(league.userTeam.balance||0).toLocaleString()}`)
   saveLeague(league)
   return { success:true }
+}
+
+export function calculateDeadMoney(league, playerId, season = league.season || 1){
+  const pl = getPlayerById(league, playerId)
+  if(!pl || !pl.contract) return 0
+  const c = pl.contract
+  const yearsElapsed = Math.max(0, (season - (c.startSeason || season)))
+  const remainingYears = Math.max(0, c.years - yearsElapsed)
+  if(!c.signingBonus || c.signingBonus === 0) return 0
+  const amort = c.signingBonus / c.years
+  const dead = Math.round(amort * remainingYears)
+  return dead
+}
+
+export function releasePlayer(league, playerId){
+  // remove from roster, apply dead money to league.deadMoney
+  league.deadMoney = league.deadMoney || 0
+  const dead = calculateDeadMoney(league, playerId, league.season || 1)
+  league.deadMoney += dead
+  // remove player from user's roster if present
+  league.userTeam = league.userTeam || {}
+  league.userTeam.roster = league.userTeam.roster || []
+  league.userTeam.roster = league.userTeam.roster.filter(p => p.id !== playerId)
+  addNotification(league, `Released player; $${dead.toLocaleString()} dead money added.`)
+  saveLeague(league)
+  return { league, dead }
+}
+
+export function restructureContract(league, playerId, newSalary, convertToBonus = 0){
+  // convert up to convertToBonus of future salary into signing bonus spread across remaining years
+  const pl = (league.userTeam && league.userTeam.roster||[]).find(p=>p.id===playerId)
+  if(!pl || !pl.contract) return { success:false, reason: 'Player not found' }
+  const c = pl.contract
+  const remainingYears = c.years - Math.max(0, (league.season || 1) - (c.startSeason || league.season || 1))
+  if(remainingYears <= 0) return { success:false, reason: 'No remaining years' }
+  const bonus = Math.min(convertToBonus, newSalary)
+  // increase signing bonus and adjust salary
+  c.signingBonus = (c.signingBonus || 0) + bonus
+  c.salary = Number(newSalary)
+  // no immediate cash change, but increases future cap amortization
+  addNotification(league, `${pl.name} contract restructured: new salary $${Number(newSalary).toLocaleString()}, bonus $${bonus.toLocaleString()}`)
+  saveLeague(league)
+  return { success:true }
+}
+
+export function getCapProjection(league, seasons = 3){
+  const out = []
+  const baseSeason = league.season || 1
+  for(let s=0;s<seasons;s++){
+    const seasonYear = baseSeason + s
+    let payroll = 0
+    // include roster salaries
+    const allPlayers = []
+    ;(league.teams||[]).forEach(t=> t.roster.forEach(p=> allPlayers.push(p)))
+    league.userTeam && league.userTeam.roster && league.userTeam.roster.forEach(p=> allPlayers.push(p))
+    allPlayers.forEach(p=>{
+      const c = p.contract || {}
+      payroll += (c.salary || 0)
+      // amortization of signing bonus for this season
+      if(c.signingBonus && c.years){
+        const yearsElapsed = Math.max(0, (seasonYear - (c.startSeason || seasonYear)))
+        if(yearsElapsed < c.years){
+          payroll += Math.round((c.signingBonus || 0) / c.years)
+        }
+      }
+    })
+    // add standing dead money for this season
+    if(s===0) payroll += (league.deadMoney || 0)
+    out.push({ season: seasonYear, payroll })
+  }
+  return out
+}
+
+export function agePlayersByOneSeason(league){
+  ;(league.teams||[]).forEach(t=> t.roster.forEach(p => { p.age = (p.age || 20) + 1; if(p.age > 30) p.overall = Math.max(40, p.overall - randInt(0,3)) }))
+  league.userTeam && league.userTeam.roster && league.userTeam.roster.forEach(p => { p.age = (p.age || 20) + 1; if(p.age > 30) p.overall = Math.max(40, p.overall - randInt(0,3)) })
+  saveLeague(league)
+  return league
+}
+
+export function advanceSeason(league){
+  league.season = (league.season || 1) + 1
+  league.week = 1
+  agePlayersByOneSeason(league)
+  // small chance of retirements (if age>38 and low overall)
+  ;(league.teams||[]).forEach(t=> t.roster = t.roster.filter(p => !(p.age>38 && p.overall<55) ))
+  if(league.userTeam && league.userTeam.roster) league.userTeam.roster = league.userTeam.roster.filter(p => !(p.age>38 && p.overall<55))
+  addNotification(league, `Season advanced to ${league.season}. Players aged and retirements processed.`)
+  saveLeague(league)
+  return league
 }
 
 export function setInjuryWeeks(league, playerId, weeks){
@@ -466,15 +756,27 @@ export function evaluateTrade(league, offeringTeamName, receivingTeamName, offer
   const needBonusForOffering = Math.max(0, 2 - countAtPos(offeringTeam, pRec.pos)) * 140
 
   // From receiving team's perspective: they receive pOff and give away pRec
-  const receivingNet = valOff + needBonusForReceiving - valRec
+  // persona-driven preferences
+  const persona = receivingTeam.persona || { style: 'balanced', aggressiveness: 0.5 }
+  let personaBonus = 0
+  if(persona.style === 'rebuild'){
+    // prefers youth: positive bonus if offering player is younger relative to receiving player
+    personaBonus += ((30 - (pOff.age || 25)) - (30 - (pRec.age || 25))) * 6
+  } else if(persona.style === 'win-now'){
+    // prefers immediate veteran performance
+    personaBonus += ((pOff.age || 25) - (pRec.age || 25)) * 4
+  }
+
+  const receivingNet = valOff + needBonusForReceiving - valRec + personaBonus
 
   const difficulty = (league.settings && league.settings.difficulty) || 1
-  const tolerance = 180 * (1 + difficulty * 0.45) // higher difficulty => less tolerant
+  // teams with higher aggressiveness are more tolerant of net negatives (willing to gamble)
+  const tolerance = 180 * (1 + difficulty * 0.45) * (1 + (persona.aggressiveness - 0.5) * 0.6)
 
   const accepted = receivingNet >= -tolerance
   const diff = receivingNet
   const reason = accepted ? `Accepted (net ${Math.round(diff)})` : `Declined (would lose ${Math.round(-diff)} value)`
-  return { accepted, diff, valOff, valRec, needBonusForReceiving, needBonusForOffering, reason }
+  return { accepted, diff, valOff, valRec, needBonusForReceiving, needBonusForOffering, personaBonus, persona: persona.style, reason }
 }
 
 export function proposeTrade(league, offeringTeamName, receivingTeamName, offeringPlayerId, receivingPlayerId){

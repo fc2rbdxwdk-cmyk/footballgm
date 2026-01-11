@@ -1,6 +1,7 @@
 import assert from 'assert'
 import { createNewLeague, evaluateTrade, proposeTrade, simulateGame } from './api.js'
 import { simulateWeek, proposeContract, signFreeAgent, setInjuryWeeks, clearInjury, signDraftPick } from './api.js'
+import { scoutProspect, generateProspects, getScoutReport } from './api.js'
 
 function testEvaluateTrade(){
   const league = createNewLeague()
@@ -45,15 +46,16 @@ function testProposeContract(){
   const league = createNewLeague()
   league.userTeam.balance = 50000
   const p = league.userTeam.roster[0]
-  const res = proposeContract(league, p.id, 3, 10000)
+  const res = proposeContract(league, p.id, 3, 10000, 6000, 6000)
   assert.ok(res && res.success)
   const after = league.userTeam.balance
-  // signing bonus should be 50% of 10k = 5k
-  assert.strictEqual(after, 50000 - 5000)
+  // signing bonus should be 6000
+  assert.strictEqual(after, 50000 - 6000)
   // contract updated
   const pl = league.userTeam.roster.find(x=>x.id===p.id)
   assert.strictEqual(pl.contract.years, 3)
   assert.strictEqual(pl.contract.salary, 10000)
+  assert.strictEqual(pl.contract.signingBonus, 6000)
   console.log('proposeContract applied and deducted bonus, new balance', after)
 }
 
@@ -73,12 +75,62 @@ function testInjurySetClear(){
   const league = createNewLeague()
   const p = league.userTeam.roster[1]
   const updated = setInjuryWeeks(league, p.id, 4)
-  const pl = (updated && updated.userTeam && updated.userTeam.roster.find(x=>x.id===p.id)) || p
+  const pl = (updated && ((updated.userTeam && updated.userTeam.roster.find(x=>x.id===p.id)) || updated.teams?.flatMap(t=>t.roster||[]).find(x=>x.id===p.id))) || p
   assert.strictEqual(pl.injury.weeks, 4)
   const after = clearInjury(updated, p.id)
-  const pl2 = (after && after.userTeam && after.userTeam.roster.find(x=>x.id===p.id)) || p
+  const pl2 = (after && ((after.userTeam && after.userTeam.roster.find(x=>x.id===p.id)) || after.teams?.flatMap(t=>t.roster||[]).find(x=>x.id===p.id))) || p
   assert.strictEqual(pl2.injury, null)
   console.log('setInjuryWeeks and clearInjury work as expected')
+}
+
+function testDraftBoardAndTrading(){
+  const league = createNewLeague()
+  // prepare draft with 2 rounds
+  startDraft(league, 2)
+  const board = league.draft.board
+  assert.strictEqual(board.length, (league.teams.length + 1) * 2)
+  const pickA = board[0]
+  const pickB = board[1]
+  // trade picks pre-draft
+  const res = tradePicks(league, pickA.id, pickB.id)
+  // tradePicks may be declined by AI depending on evaluation, but should not throw
+  if(res.success){
+    // owners swapped
+    assert.strictEqual(board[0].owner, pickB.originalOwner)
+    assert.strictEqual(board[1].owner, pickA.originalOwner)
+    console.log('tradePicks accepted before draft start')
+  } else {
+    console.log('tradePicks was declined by AI (expected in some difficulty settings)')
+  }
+}
+
+function testPerformDraftPick(){
+  const league = createNewLeague()
+  // setup prospects and draft
+  league.prospects = generateProspects(8)
+  startDraft(league, 1)
+  beginDraft(league)
+  const pick = league.draft.board[0]
+  const player = league.prospects[0]
+  const res = performDraftPick(league, pick.id, player.id)
+  assert.ok(res.success)
+  // ensure player moved from prospects to roster
+  assert.strictEqual(league.prospects.find(p=>p.id===player.id), undefined)
+  const team = (league.userTeam.name === pick.owner) ? league.userTeam : league.teams.find(t=>t.name===pick.owner)
+  assert.ok(team.roster.find(p=>p.name === player.name))
+  console.log('performDraftPick moved player to roster')
+}
+
+function testAIAutoPick(){
+  const league = createNewLeague()
+  league.prospects = generateProspects(6)
+  startDraft(league, 1)
+  // ensure user is somewhere in the board; then beginDraft should auto-pick until user's pick
+  const begun = beginDraft(league)
+  // find first pick owned by AI (not user)
+  const aiPicked = begun.draft.board.filter(p=> p.playerId && p.owner !== begun.userTeam.name)
+  assert.ok(aiPicked.length > 0)
+  console.log('testAIAutoPick: AI picks were made before user pick')
 }
 
 function testDraftSign(){
@@ -91,6 +143,53 @@ function testDraftSign(){
   console.log('signDraftPick moved prospect to roster and deducted cost')
 }
 
+function testScoutingModel(){
+  const league = createNewLeague()
+  league.scoutingPoints = 20
+  league.prospects = generateProspects(3)
+  const p = league.prospects[0]
+  const beforeGrade = p.scoutGrade
+  const beforePoints = league.scoutingPoints
+  const res = scoutProspect(league, p.id, 5)
+  assert.ok(res.success)
+  assert.strictEqual(league.scoutingPoints, beforePoints - 5)
+  const rep = getScoutReport(league, p.id)
+  assert.ok(rep.success)
+  assert.ok(Number.isInteger(rep.grade))
+  assert.ok(Array.isArray(rep.sources))
+  console.log('scouting model test: scouting consumed points and created a report')
+}
+
+function testReleaseCreatesDeadMoney(){
+  const league = createNewLeague()
+  league.userTeam.balance = 50000
+  const p = league.userTeam.roster[0]
+  // sign a contract with signing bonus of 6000 over 3 years
+  proposeContract(league, p.id, 3, 10000, 6000, 6000)
+  const res = releasePlayer(league, p.id)
+  // dead money should be amortized bonus remaining; since we released immediately, remaining ~6000
+  assert.ok(res.dead >= 2000)
+  assert.ok(league.deadMoney >= res.dead)
+  console.log('releasePlayer added dead money', res.dead)
+}
+
+function testPersonaInfluence(){
+  const league = createNewLeague()
+  const user = league.userTeam
+  const opponent = league.teams.find(t=>t.name!==user.name)
+  const myPlayer = user.roster[1]
+  const theirPlayer = opponent.roster[1]
+  // craft age/overall to show youth vs veteran
+  myPlayer.age = 21; myPlayer.overall = 60
+  theirPlayer.age = 28; theirPlayer.overall = 70
+
+  const base = evaluateTrade(league, user.name, opponent.name, myPlayer.id, theirPlayer.id)
+  opponent.persona = { style: 'rebuild', aggressiveness: 0.9 }
+  const post = evaluateTrade(league, user.name, opponent.name, myPlayer.id, theirPlayer.id)
+  assert.ok(post.diff >= base.diff)
+  console.log('testPersonaInfluence: persona modified trade diff as expected', base.diff, '->', post.diff)
+}
+
 function runAll(){
   testEvaluateTrade()
   testProposeTrade()
@@ -100,6 +199,8 @@ function runAll(){
   testSignFreeAgentInsufficient()
   testInjurySetClear()
   testDraftSign()
+  testPersonaInfluence()
+  testScoutingModel()
   console.log('All tests passed')
 }
 
